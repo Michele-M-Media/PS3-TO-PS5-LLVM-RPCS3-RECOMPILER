@@ -54,4 +54,12 @@ cmake --build build/ps5 --target rpcs3
 
 Pass the native ELF to the application packaging tools provided by your target environment. Use the resulting `eboot.bin` with the staging command above.
 
-RPCS3 source keeps its upstream license and notices. Vulkan-related license texts and dependency notices are in [licenses](licenses). See [THIRD_PARTY.md](THIRD_PARTY.md) for the source references.
+## Credits
+
+- The **RPCS3 team and contributors** developed the emulator core, the PPU and SPU recompilers, the RSX implementation, and the Vulkan shader interpreter. The default app icon uses the RPCS3 logo. [RPCS3](https://github.com/RPCS3/rpcs3) · [Contributors](https://github.com/RPCS3/rpcs3/graphs/contributors)
+- The **LLVM Project contributors** developed the compiler backend. The native build uses the PS5 LLVM port maintained by **lavavex**. [LLVM](https://llvm.org/) · [PS5 LLVM](https://github.com/lavavex/PS5_LLVM)
+- The **Mesa contributors** developed the RADV driver. **mihawk-99** and the contributors to PS5 Vulkan and PS5 Mesa provide the native graphics integration. [Mesa](https://www.mesa3d.org/) · [PS5 Vulkan](https://github.com/mihawk-99/PS5_Vulkan) · [PS5 Mesa](https://github.com/mihawk-99/PS5_Mesa)
+- **The Khronos Group** maintains the Vulkan headers. **Arseny Kapoulkine** and contributors maintain volk, the Vulkan loader helper. [Vulkan Headers](https://github.com/KhronosGroup/Vulkan-Headers) · [volk](https://github.com/zeux/volk)
+- The **PS5 Payload SDK**, **Qt**, and **FFmpeg** contributors provide tooling, the application framework, and media support. [PS5 Payload SDK](https://github.com/ps5-payload-dev/sdk) · [Qt](https://www.qt.io/) · [FFmpeg](https://ffmpeg.org/)
+
+RPCS3 source keeps its upstream license and notices. The dependency revisions and license texts are listed in [THIRD_PARTY.md](THIRD_PARTY.md) and [licenses](licenses).
