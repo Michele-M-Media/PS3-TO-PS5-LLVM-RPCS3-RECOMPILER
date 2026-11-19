@@ -23,12 +23,12 @@ inline std::string_view heading(int language)
 {
     switch (language)
     {
-    case 0: return "RPCS3 Recompiler\nトロフィー獲得 ";
-    case 2: return "RPCS3 Recompiler\nTrophée obtenu ";
-    case 3: return "RPCS3 Recompiler\nTrofeo conseguido ";
-    case 4: return "RPCS3 Recompiler\nTrophäe erhalten ";
-    case 5: return "RPCS3 Recompiler\nTrofeo sbloccato ";
-    default: return "RPCS3 Recompiler\nTrophy earned ";
+    case 0: return "PS3 TO PS5 LLVM RPCS3 RECOMPILER\nトロフィー獲得 ";
+    case 2: return "PS3 TO PS5 LLVM RPCS3 RECOMPILER\nTrophée obtenu ";
+    case 3: return "PS3 TO PS5 LLVM RPCS3 RECOMPILER\nTrofeo conseguido ";
+    case 4: return "PS3 TO PS5 LLVM RPCS3 RECOMPILER\nTrophäe erhalten ";
+    case 5: return "PS3 TO PS5 LLVM RPCS3 RECOMPILER\nTrofeo sbloccato ";
+    default: return "PS3 TO PS5 LLVM RPCS3 RECOMPILER\nTrophy earned ";
     }
 }
 

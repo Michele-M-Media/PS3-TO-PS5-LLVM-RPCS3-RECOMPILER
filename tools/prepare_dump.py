@@ -1,4 +1,4 @@
-"""Inspect a PS3 disc dump or assemble a private local RPCS3 Recompiler folder."""
+"""Inspect a PS3 disc dump or assemble a private local PS3 TO PS5 LLVM RPCS3 RECOMPILER folder."""
 
 import argparse
 import json
@@ -9,7 +9,7 @@ import struct
 import sys
 
 TEMPLATE = Path(__file__).resolve().parents[1] / "templates/rpcs3-recompiler.yml"
-TITLE = "RPCS3 Recompiler"
+TITLE = "PS3 TO PS5 LLVM RPCS3 RECOMPILER"
 
 
 def sfo(path):
@@ -72,7 +72,7 @@ def stage(args):
     info = inspect(disc)
     core = args.core.resolve(strict=True)
     if core.name.lower() != "eboot.bin" or not core.is_file():
-        raise ValueError("Use the packaged RPCS3 Recompiler eboot.bin")
+        raise ValueError("Use the packaged PS3 TO PS5 LLVM RPCS3 RECOMPILER eboot.bin")
     firmware = args.firmware.resolve(strict=True)
     if not (firmware / "sys/external").is_dir():
         raise ValueError("Select the dev_flash directory from your local RPCS3 firmware installation")

@@ -107,7 +107,7 @@ class recompiler_title_application final : public QApplication, public main_appl
 public:
     recompiler_title_application(int& argc, char** argv) : QApplication(argc,argv)
     {
-        setApplicationName("RPCS3 Recompiler");
+        setApplicationName("PS3 TO PS5 LLVM RPCS3 RECOMPILER");
         setQuitOnLastWindowClosed(false);
     }
 
@@ -323,9 +323,9 @@ int main()
     memory_stage("logger_begin");
     auto log=logs::make_file_listener(fs::get_log_dir()+"recompiler-core.log",64*1024*1024);
     memory_stage("logger_ready");
-    logs::stored_message first{sys_log.always()};first.text="RPCS3 Recompiler: PPU/SPU LLVM and native Vulkan";
+    logs::stored_message first{sys_log.always()};first.text="PS3 TO PS5 LLVM RPCS3 RECOMPILER: PPU/SPU LLVM and native Vulkan";
     logs::set_init({std::move(first)});
-    int argc=1;char name[]="RPCS3 Recompiler";char* argv[]={name,nullptr};
+    int argc=1;char name[]="PS3 TO PS5 LLVM RPCS3 RECOMPILER";char* argv[]={name,nullptr};
     memory_stage("qt_begin");
     recompiler_title_application title(argc,argv);
     memory_stage("qt_ready");

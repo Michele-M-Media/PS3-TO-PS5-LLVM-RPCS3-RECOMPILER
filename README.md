@@ -1,6 +1,8 @@
-# RPCS3 Recompiler
+# PS3 TO PS5 LLVM RPCS3 RECOMPILER
 
-RPCS3 Recompiler boots a local PS3 disc dump directly with a PS5 build of the RPCS3 runtime. It uses LLVM for PPU and SPU code and the native Vulkan backend for RSX graphics. The profile keeps RPCS3's default GPU settings, including resolution scale, frame limit and VBlank. Vulkan and the PS5 audio backend are selected for the target.
+![PS3 to PS5 LLVM RPCS3 Recompiler](assets/banner.png)
+
+PS3 TO PS5 LLVM RPCS3 RECOMPILER boots a local PS3 disc dump directly with a PS5 build of the RPCS3 runtime. It uses LLVM for PPU and SPU code and the native Vulkan backend for RSX graphics. The profile keeps RPCS3's default GPU settings, including resolution scale, frame limit and VBlank. Vulkan and the PS5 audio backend are selected for the target.
 
 The Vulkan changes include the interpreter's base pipeline catalogue, parallel preparation, shared driver caching, device-checked dynamic states, depth and feedback passes, and retry of pending texture uploads. LLVM and Vulkan caches are built locally and reused on later launches. A new game or driver can still require compilation. Compatibility and timing depend on the game and need to be tested on the target.
 
@@ -18,7 +20,7 @@ python tools/prepare_dump.py stage \
   --output local/DiscA
 ```
 
-Use a `param.json` from the local package for the target PS5 homebrew title and its matching platform modules. The tool sets the display name to **RPCS3 Recompiler** in each locale and preserves the package identifiers. `templates/param.json` shows the name fields with placeholder IDs. Keep platform modules supplied by the native build in `sce_module/` when needed. Run the resulting directory with your PS5 homebrew environment.
+Use a `param.json` from the local package for the target PS5 homebrew title and its matching platform modules. The tool sets the display name to **PS3 TO PS5 LLVM RPCS3 RECOMPILER** in each locale and preserves the package identifiers. `templates/param.json` shows the name fields with placeholder IDs. Keep platform modules supplied by the native build in `sce_module/` when needed. Run the resulting directory with your PS5 homebrew environment.
 
 The package uses the RPCS3 icon by default. Pass `--icon0 path/to/icon.png` to replace the icon and `--pic0 path/to/background.png` to add a background. These options only change the local output directory.
 
