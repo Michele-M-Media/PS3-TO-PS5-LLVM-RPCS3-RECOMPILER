@@ -1,0 +1,8 @@
+Core:
+  PPU Decoder: Recompiler (LLVM)
+  SPU Decoder: Recompiler (LLVM)
+  SPU Cache: true
+Video:
+  Renderer: Vulkan
+Audio:
+  Renderer: SceAudioOut

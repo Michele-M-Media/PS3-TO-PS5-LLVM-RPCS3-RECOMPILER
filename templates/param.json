@@ -1,0 +1,13 @@
+{
+  "titleId": "PPSA00000",
+  "contentId": "UP0000-PPSA00000_00-RPCS3RECOMPILER0",
+  "localizedParameters": {
+    "defaultLanguage": "en-US",
+    "en-US": {
+      "titleName": "RPCS3 Recompiler"
+    },
+    "it-IT": {
+      "titleName": "RPCS3 Recompiler"
+    }
+  }
+}

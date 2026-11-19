@@ -1,0 +1,5167 @@
+--- a/3rdparty/CMakeLists.txt
++++ b/3rdparty/CMakeLists.txt
+@@ -51,7 +51,7 @@
+ endif()
+ 
+ # libusb
+-if(CMAKE_SYSTEM_NAME MATCHES "DragonFly|FreeBSD")
++if(CMAKE_SYSTEM_NAME MATCHES "DragonFly|FreeBSD" AND NOT PS5)
+ 	pkg_check_modules(LIBUSB REQUIRED IMPORTED_TARGET libusb-1.0>=1.0 )
+ 	cmake_dependent_option(USE_SYSTEM_LIBUSB "Use system libusb-1.0 as shared library" ON
+ 			"LIBUSB_FOUND" OFF)
+@@ -60,7 +60,7 @@
+ 	cmake_dependent_option(USE_SYSTEM_LIBUSB "Use system libusb-1.0 as shared library" OFF
+ 			"LIBUSB_FOUND" OFF)
+ endif()
+-if(CMAKE_SYSTEM_NAME MATCHES "DragonFly|FreeBSD")
++if(CMAKE_SYSTEM_NAME MATCHES "DragonFly|FreeBSD" AND NOT PS5)
+ 	# Always use system libusb as reference implementation isn't supported
+ 	add_library(usb-1.0-shared INTERFACE)
+ 	target_link_libraries(usb-1.0-shared INTERFACE PkgConfig::LIBUSB)
+@@ -97,7 +97,10 @@
+ 
+ # OpenGL
+ 
+-if (NOT ANDROID AND NOT APPLE)
++if(PS5)
++	add_library(3rdparty_opengl INTERFACE)
++	target_link_libraries(3rdparty_opengl INTERFACE RPCS3::PS5OpenGL)
++elseif (NOT ANDROID AND NOT APPLE)
+ 	find_package(OpenGL REQUIRED OPTIONAL_COMPONENTS EGL)
+ 
+ 	add_library(3rdparty_opengl INTERFACE)
+@@ -124,7 +127,9 @@
+ add_subdirectory(discord-rpc)
+ 
+ # Cubeb
+-if(USE_SYSTEM_CUBEB)
++if(PS5)
++    # Native output is implemented by SceAudioOut.
++elseif(USE_SYSTEM_CUBEB)
+ 	find_package(cubeb REQUIRED GLOBAL)
+ 	message(STATUS "Using system cubeb version '${cubeb_VERSION}'")
+ 	add_library(3rdparty::cubeb ALIAS cubeb::cubeb)
+@@ -182,13 +187,17 @@
+ 		endif()
+ 	endif()
+ 
+-	find_package(Vulkan)
++	if(PS5)
++		set(VULKAN_FOUND TRUE)
++	else()
++		find_package(Vulkan)
++	endif()
+ 	if(VULKAN_FOUND)
+ 		add_library(3rdparty_vulkan INTERFACE)
+ 		target_compile_definitions(3rdparty_vulkan INTERFACE -DHAVE_VULKAN)
+ 		target_link_libraries(3rdparty_vulkan INTERFACE Vulkan::Vulkan)
+ 
+-		if(UNIX AND NOT APPLE AND NOT ANDROID)
++		if(UNIX AND NOT APPLE AND NOT ANDROID AND NOT PS5)
+ 			find_package(Wayland)
+ 			if (WAYLAND_FOUND)
+ 				target_include_directories(3rdparty_vulkan
+@@ -232,11 +241,14 @@
+ endif()
+ 
+ # OpenAL
+-if (NOT ANDROID)
++if (NOT ANDROID AND NOT PS5)
+ 	add_subdirectory(OpenAL EXCLUDE_FROM_ALL)
+ else()
+ 	add_library(3rdparty_openal INTERFACE)
+ 	target_compile_definitions(3rdparty_openal INTERFACE WITHOUT_OPENAL=1)
++    if(PS5)
++        target_include_directories(3rdparty_openal SYSTEM INTERFACE OpenAL/openal-soft/include/AL)
++    endif()
+ endif()
+ 
+ # FAudio
+@@ -323,7 +335,9 @@
+ 
+ # GLEW
+ add_library(3rdparty_glew INTERFACE)
+-if(NOT MSVC AND NOT ANDROID AND NOT APPLE)
++if(PS5)
++	target_link_libraries(3rdparty_glew INTERFACE RPCS3::PS5GLEW)
++elseif(NOT MSVC AND NOT ANDROID AND NOT APPLE)
+ 	find_package(GLEW REQUIRED)
+ 	target_link_libraries(3rdparty_glew INTERFACE GLEW::GLEW)
+ endif()
+--- a/3rdparty/curl/CMakeLists.txt
++++ b/3rdparty/curl/CMakeLists.txt
+@@ -27,6 +27,9 @@
+ 	set(BUILD_EXAMPLES OFF CACHE INTERNAL "")
+ 
+ 	add_subdirectory(curl EXCLUDE_FROM_ALL)
++    if(PS5)
++        include("${CMAKE_SOURCE_DIR}/ps5/dependencies/NativeCurl.cmake")
++    endif()
+ 
+ 	add_library(3rdparty_libcurl INTERFACE)
+ 	target_link_libraries(3rdparty_libcurl INTERFACE libcurl_static)
+--- a/3rdparty/hidapi/CMakeLists.txt
++++ b/3rdparty/hidapi/CMakeLists.txt
+@@ -15,6 +15,9 @@
+ 
+ 	add_library(3rdparty_hidapi INTERFACE)
+ 	add_subdirectory(hidapi EXCLUDE_FROM_ALL)
++    if(PS5)
++        include("${CMAKE_SOURCE_DIR}/ps5/dependencies/NativeHidapi.cmake")
++    endif()
+ 
+ 	if(APPLE)
+ 		target_link_libraries(3rdparty_hidapi INTERFACE hidapi_darwin "-framework CoreFoundation" "-framework IOKit")
+@@ -22,7 +25,7 @@
+ 		target_link_libraries(3rdparty_hidapi INTERFACE hidapi-hidraw udev)
+ 	elseif(WIN32)
+ 		target_link_libraries(3rdparty_hidapi INTERFACE hidapi::hidapi hidapi::include Shlwapi.lib)
+-	elseif(ANDROID)
++	elseif(ANDROID OR PS5)
+ 		target_link_libraries(3rdparty_hidapi INTERFACE hidapi::libusb)
+ 	else()
+ 		target_link_libraries(3rdparty_hidapi INTERFACE hidapi-libusb usb)
+--- a/3rdparty/libusb/os.cmake
++++ b/3rdparty/libusb/os.cmake
+@@ -90,6 +90,9 @@
+ 		if(NOT ANDROID)
+ 			list(APPEND LIBUSB_LIBRARIES rt)
+ 		endif()
++    elseif(PS5)
++        # Physical USB passthrough is unsupported; never report fake devices.
++        set(PLATFORM_SRC null_usb.c threads_posix.c events_posix.c)
+ 	endif()
+ endif()
+ 
+--- a/3rdparty/llvm/CMakeLists.txt
++++ b/3rdparty/llvm/CMakeLists.txt
+@@ -107,6 +107,10 @@
+ 
+ 	add_library(3rdparty_llvm INTERFACE)
+ 	target_link_libraries(3rdparty_llvm INTERFACE ${LLVM_LIBS})
++    if(PS5)
++        include("${CMAKE_SOURCE_DIR}/ps5/llvm/LLVMInterop.cmake")
++        target_link_libraries(3rdparty_llvm INTERFACE rpcs3_ps5_llvm_process)
++    endif()
+ 	target_include_directories(3rdparty_llvm SYSTEM INTERFACE ${LLVM_INCLUDE_DIRS})
+ 	separate_arguments(LLVM_DEFINITIONS_LIST NATIVE_COMMAND ${LLVM_DEFINITIONS})
+ 	target_compile_definitions(3rdparty_llvm INTERFACE ${LLVM_DEFINITIONS_LIST} LLVM_AVAILABLE)
+--- a/3rdparty/qt6.cmake
++++ b/3rdparty/qt6.cmake
+@@ -6,7 +6,11 @@
+ if(WIN32)
+ 	target_link_libraries(3rdparty_qt6 INTERFACE Qt6::Widgets Qt6::Concurrent Qt6::Multimedia Qt6::MultimediaWidgets Qt6::Svg Qt6::SvgWidgets)
+ else()
+-    find_package(Qt6 ${QT_MIN_VER} COMPONENTS DBus Gui)
++    if(PS5)
++        find_package(Qt6 ${QT_MIN_VER} REQUIRED COMPONENTS Gui)
++    else()
++        find_package(Qt6 ${QT_MIN_VER} COMPONENTS DBus Gui)
++    endif()
+     if(Qt6_VERSION VERSION_GREATER_EQUAL "6.10.0")
+ 	    set(QT_NO_PRIVATE_MODULE_WARNING ON)
+ 	    find_package(Qt6 ${QT_MIN_VER} COMPONENTS GuiPrivate)
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -8,6 +8,10 @@
+ endif()
+ 
+ project(rpcs3 LANGUAGES C CXX)
++
++if(PS5)
++    include("${CMAKE_CURRENT_SOURCE_DIR}/ps5/preflight.cmake")
++endif()
+ 
+ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+ set(CMAKE_POSITION_INDEPENDENT_CODE ON)
+--- a/Utilities/File.cpp
++++ b/Utilities/File.cpp
+@@ -1,4 +1,7 @@
+ #include "File.h"
++#ifdef __PROSPERO__
++#include "ps5/qt/native_paths.h"
++#endif
+ #include "mutex.h"
+ #include "StrFmt.h"
+ 
+@@ -14,7 +17,8 @@
+ 
+ using namespace std::literals::string_literals;
+ 
+-#ifdef ANDROID
++// Android frontend hooks. PS5 paths initialize on first use, including before main.
++#if defined(ANDROID)
+ std::string g_android_executable_dir;
+ std::string g_android_config_dir;
+ std::string g_android_cache_dir;
+@@ -2155,7 +2159,9 @@
+ 
+ std::string fs::get_executable_path()
+ {
+-#ifdef ANDROID
++#ifdef __PROSPERO__
++	return rpcs3::ps5::native_paths::app_directory() + "eboot.bin";
++#elif defined(ANDROID)
+ 	return g_android_executable_dir + "/dummy-rpcs3.apk";
+ #else
+ 	// Use magic static
+@@ -2208,7 +2214,9 @@
+ 
+ std::string fs::get_executable_dir()
+ {
+-#ifdef ANDROID
++#ifdef __PROSPERO__
++	return rpcs3::ps5::native_paths::app_directory();
++#elif defined(ANDROID)
+ 	return g_android_executable_dir;
+ #else
+ 	// Use magic static
+@@ -2229,7 +2237,9 @@
+ 
+ const std::string& fs::get_config_dir([[maybe_unused]] bool get_config_subdirectory)
+ {
+-#ifdef ANDROID
++#ifdef __PROSPERO__
++	return rpcs3::ps5::native_paths::data_directory();
++#elif defined(ANDROID)
+ 	return g_android_config_dir;
+ #else
+ 	// Use magic static
+@@ -2326,7 +2336,9 @@
+ 
+ const std::string& fs::get_cache_dir()
+ {
+-#ifdef ANDROID
++#ifdef __PROSPERO__
++	return rpcs3::ps5::native_paths::cache_directory();
++#elif defined(ANDROID)
+ 	return g_android_cache_dir;
+ #else
+ 	static const std::string s_dir = []
+--- a/Utilities/JITLLVM.cpp
++++ b/Utilities/JITLLVM.cpp
+@@ -241,7 +241,7 @@
+ 	MemoryManager1(std::function<u64(const std::string&)> symbols_cement = {}) noexcept
+ 		: m_symbols_cement(std::move(symbols_cement))
+ 	{
+-		auto ptr = reinterpret_cast<u8*>(utils::memory_reserve(c_max_size * 3, true));
++		auto ptr = ensure(reinterpret_cast<u8*>(utils::memory_reserve(c_max_size * 3, true)), "JIT memory manager: out of address space");
+ 		m_code_mems = ptr;
+ 		// ptr += c_max_size;
+ 		// m_data_ro_mems = ptr;
+--- a/Utilities/Thread.cpp
++++ b/Utilities/Thread.cpp
+@@ -1546,6 +1546,10 @@
+ 	extern std::function<bool(u32 addr, bool is_writing)> g_access_violation_handler;
+ }
+ 
++#ifdef __PROSPERO__
++extern "C" int sceKernelQueryMemoryProtection(void* address, void** start, void** end, u32* protection);
++#endif
++
+ bool handle_access_violation(u32 addr, bool is_writing, bool is_exec, ucontext_t* context) noexcept
+ {
+ 	g_tls_fault_all++;
+@@ -1608,6 +1612,31 @@
+ #if defined(ARCH_X64)
+ 	const u8* const code = reinterpret_cast<u8*>(RIP(context));
+ 
++#ifdef __PROSPERO__
++	// The title's own code and the system modules are execute-only on the PS5: reading the
++	// faulting instruction there faults again and kills the process. Only JIT code is readable.
++	// The decoded instruction is needed only to emulate RawSPU MMIO below; any other fault
++	// (such as a write to memory the texture cache protects) goes on to the generic handling.
++	bool code_readable = true;
++	{
++		void* start = nullptr;
++		void* end = nullptr;
++		u32 prot = 0;
++		if (::sceKernelQueryMemoryProtection(const_cast<u8*>(code), &start, &end, &prot) != 0 || !(prot & 0x1))
++		{
++			code_readable = false;
++		}
++	}
++
++	if (!code_readable && addr - RAW_SPU_BASE_ADDR < (6 * RAW_SPU_OFFSET) && (addr % RAW_SPU_OFFSET) >= RAW_SPU_PROB_OFFSET)
++	{
++		sig_log.error("RawSPU MMIO access at 0x%x from execute-only code at %p: cannot decode the instruction", addr, code);
++		return false;
++	}
++
++	if (code_readable)
++#endif
++	{
+ 	x64_op_t op;
+ 	x64_reg_t reg;
+ 	usz d_size;
+@@ -1832,6 +1861,7 @@
+ 		g_tls_fault_spu++;
+ 		return true;
+ 	} while (0);
++	}
+ #elif defined(ARCH_ARM64)
+ 	const u8* const code = reinterpret_cast<u8*>(RIP(context));
+ 
+@@ -2491,6 +2521,15 @@
+ }();
+ 
+ #else
++
++// Ends the calling thread. On the PS5 the platform layer created it (radv-link.sh wraps
++// pthread_create) and must end it: its pthread_exit runs the thread_local destructors first.
++#ifdef __PROSPERO__
++extern "C" [[noreturn]] void ps5_pthread_exit(void* value);
++[[noreturn]] static void thread_exit_native() { ps5_pthread_exit(nullptr); }
++#elif !defined(_WIN32)
++[[noreturn]] static void thread_exit_native() { pthread_exit(nullptr); }
++#endif
+ 
+ static void signal_handler(int /*sig*/, siginfo_t* info, void* uct) noexcept
+ {
+@@ -2578,6 +2617,15 @@
+ 
+ 	std::string msg = fmt::format("Segfault %s location %p at %p.\n", cause, info->si_addr, RIP(context));
+ 
++#ifdef __PROSPERO__
++	{
++		// No debugger on the console: klogsrv shows the kernel's backtrace of the fault, and the
++		// anchor's link address maps it to the image (the load base)
++		const uptr anchor = reinterpret_cast<uptr>(&signal_handler);
++		fmt::append(msg, "PS5 context: rip=%p rsp=%p rbp=%p anchor(signal_handler)=%p\n", RIP(context), RSP(context), *X64REG(context, 5), anchor);
++	}
++#endif
++
+ 	if (vm::try_get_addr(info->si_addr).second)
+ 	{
+ 		fmt::append(msg, "Sudo Addr: %p, VM Addr: %p\n", vm::g_sudo_addr, vm::g_base_addr);
+@@ -2695,6 +2743,11 @@
+ 
+ #endif
+ 
++#ifdef __PROSPERO__
++std::string describe_current_exception();
++std::string describe_current_stack();
++#endif
++
+ const bool s_terminate_handler_set = []() -> bool
+ {
+ 	std::set_terminate([]()
+@@ -2705,7 +2758,16 @@
+ 			utils::trap();
+ 		}
+ 
+-		report_fatal_error("RPCS3 has abnormally terminated.");
++#ifdef __PROSPERO__
++		// Name the exception that reached std::terminate, when there is one
++		std::string reason = describe_current_exception();
++		if (!reason.empty()) reason.insert(0, "\n");
++		reason += "\n" + describe_current_stack();
++#else
++		const std::string reason;
++#endif
++
++		report_fatal_error("RPCS3 has abnormally terminated." + reason);
+ 	});
+ 
+ 	return true;
+@@ -2957,7 +3019,7 @@
+ #ifdef _WIN32
+ 	_endthreadex(0);
+ #else
+-	pthread_exit(nullptr);
++	thread_exit_native();
+ #endif
+ 
+ 	return nullptr;
+@@ -3488,7 +3550,7 @@
+ #ifdef _WIN32
+ 		_endthreadex(0);
+ #else
+-		pthread_exit(nullptr);
++		thread_exit_native();
+ #endif
+ 	}
+ 
+@@ -3515,7 +3577,7 @@
+ #ifdef _WIN32
+ 	_endthreadex(0);
+ #else
+-	pthread_exit(nullptr);
++	thread_exit_native();
+ #endif
+ 
+ 	std::abort();
+--- /dev/null
++++ b/ps5/audio/ps5_audio_backend.cpp
+@@ -0,0 +1,128 @@
++#include "stdafx.h"
++#include "ps5_audio_backend.h"
++#include "ps5_sce.h"
++
++LOG_CHANNEL(ps5_audio_log, "SceAudioOut");
++
++ps5_audio_backend::ps5_audio_backend()
++{
++	// sceAudioOutInit may be called more than once; anything but a failure is fine
++	if (const int res = sceAudioOutInit(); res < 0 && res != static_cast<int>(0x8026000e))
++	{
++		ps5_audio_log.error("sceAudioOutInit() failed: 0x%x", res);
++		return;
++	}
++
++	m_initialized = true;
++}
++
++ps5_audio_backend::~ps5_audio_backend()
++{
++	Close();
++}
++
++bool ps5_audio_backend::Open(std::string_view /*dev_id*/, AudioFreq freq, AudioSampleSize sample_size, AudioChannelCnt ch_cnt, audio_channel_layout layout)
++{
++	if (!m_initialized)
++		return false;
++
++	Close();
++	std::lock_guard lock{m_cb_mutex};
++
++	if (freq != AudioFreq::FREQ_48K)
++	{
++		ps5_audio_log.error("Only 48 kHz output is supported (requested %u Hz)", static_cast<u32>(freq));
++		return false;
++	}
++
++	m_sampling_rate = freq;
++	m_sample_size = sample_size;
++
++	// The port is stereo; RPCS3 downmixes 5.1/7.1 to it
++	setup_channel_layout(static_cast<u32>(ch_cnt), 2, layout, ps5_audio_log);
++
++	const bool s16 = get_convert_to_s16();
++	const u32 format = s16 ? ps5::AUDIO_OUT_S16_STEREO : ps5::AUDIO_OUT_FLOAT_STEREO;
++
++	m_port = sceAudioOutOpen(ps5::AUDIO_OUT_USER_SYSTEM, 0, 0, grain, 48000, format);
++
++	if (m_port < 0)
++	{
++		ps5_audio_log.error("sceAudioOutOpen() failed: 0x%x", m_port);
++		m_port = -1;
++		return false;
++	}
++
++	m_buffer.assign(grain * get_channels() * get_sample_size(), 0);
++	ps5_audio_log.notice("Opened port %d: %s stereo, grain %u", m_port, s16 ? "s16" : "float", grain);
++
++	m_failed = false;
++	m_stop = false;
++	m_thread = std::make_unique<named_thread<std::function<void()>>>("SceAudioOut", [this]() { output_loop(); });
++	return true;
++}
++
++void ps5_audio_backend::Close()
++{
++	if (m_thread)
++	{
++		m_stop = true;
++		m_thread.reset(); // joins
++	}
++
++	std::lock_guard lock{m_cb_mutex};
++
++	if (m_port >= 0)
++	{
++		sceAudioOutClose(m_port);
++		m_port = -1;
++	}
++
++	m_playing = false;
++}
++
++void ps5_audio_backend::Play()
++{
++	std::lock_guard lock{m_cb_mutex};
++	m_playing = true;
++}
++
++void ps5_audio_backend::Pause()
++{
++	std::lock_guard lock{m_cb_mutex};
++	m_playing = false;
++}
++
++void ps5_audio_backend::output_loop()
++{
++	while (!m_stop && thread_ctrl::state() != thread_state::aborting)
++	{
++		u32 written = 0;
++		const u32 bytes = ::size32(m_buffer);
++
++		{
++			std::unique_lock lock(m_cb_mutex, std::defer_lock);
++
++			if (lock.try_lock_for(std::chrono::microseconds{50}) && m_write_callback && m_playing)
++			{
++				written = std::min(m_write_callback(bytes, m_buffer.data()), bytes);
++			}
++		}
++
++		// Silence for what the callback did not fill
++		std::memset(m_buffer.data() + written, 0, bytes - written);
++
++		// Blocks until the port takes the grain
++		if (const int result = sceAudioOutOutput(m_port, m_buffer.data()); result < 0)
++        {
++            ps5_audio_log.error("sceAudioOutOutput failed: 0x%x", result);
++            m_failed = true;
++            std::lock_guard lock{m_cb_mutex};
++            if (m_state_callback) m_state_callback(AudioStateEvent::UNSPECIFIED_ERROR);
++            break;
++        }
++	}
++
++	// Flush: an output of null waits for the port to drain
++	sceAudioOutOutput(m_port, nullptr);
++}
+--- /dev/null
++++ b/ps5/audio/ps5_audio_backend.h
+@@ -0,0 +1,40 @@
++#pragma once
++
++#include "Emu/Audio/AudioBackend.h"
++#include "Utilities/Thread.h"
++
++#include <vector>
++
++// Output through SceAudioOut: a thread pulls a grain from cellAudio's write callback and
++// hands it to the port; sceAudioOutOutput blocks until the port takes it, which paces it.
++class ps5_audio_backend final : public AudioBackend
++{
++public:
++	ps5_audio_backend();
++	~ps5_audio_backend() override;
++
++	std::string_view GetName() const override { return "SceAudioOut"sv; }
++
++	bool Initialized() override { return m_initialized; }
++	bool Operational() override { return m_port >= 0 && !m_failed; }
++
++	bool Open(std::string_view dev_id, AudioFreq freq, AudioSampleSize sample_size, AudioChannelCnt ch_cnt, audio_channel_layout layout) override;
++	void Close() override;
++
++	f64 GetCallbackFrameLen() override { return static_cast<f64>(grain) / 48000.0; }
++
++	void Play() override;
++	void Pause() override;
++
++private:
++	static constexpr u32 grain = 256; // samples per sceAudioOutOutput
++
++	bool m_initialized = false;
++	s32 m_port = -1;
++	std::vector<u8> m_buffer;
++	std::unique_ptr<named_thread<std::function<void()>>> m_thread;
++	atomic_t<bool> m_stop{false};
++	atomic_t<bool> m_failed{false};
++
++	void output_loop();
++};
+--- /dev/null
++++ b/ps5/audio/ps5_audio_enumerator.h
+@@ -0,0 +1,11 @@
++#pragma once
++#include "Emu/Audio/audio_device_enumerator.h"
++
++class ps5_audio_enumerator final : public audio_device_enumerator
++{
++public:
++    std::vector<audio_device> get_output_devices() override
++    {
++        return {{std::string(DEFAULT_DEV_ID), "PS5 Main Output", 2}};
++    }
++};
+--- /dev/null
++++ b/ps5/audio/ps5_sce.h
+@@ -0,0 +1,85 @@
++#pragma once
++
++// Console services the PS5 frontend calls. No SDK header declares them; the
++// signatures and the pad sample layout are the ones PS5_VulkanTemplate
++// (ps5/src/platform.c) runs on the console.
++
++#include <cstddef>
++#include <cstdint>
++
++extern "C"
++{
++	int sceSystemServiceHideSplashScreen(void);
++	int sceSystemServiceLoadExec(const char* path, const char* const* argv);
++	int sceUserServiceInitialize(const void* params);
++	int sceUserServiceGetInitialUser(int32_t* user_id);
++
++	struct sce_user_list
++	{
++		int32_t user_id[4]; // unused entries are -1
++	};
++	int sceUserServiceGetLoginUserIdList(sce_user_list* list);
++
++	int scePadInit(void);
++	int scePadOpen(int32_t user_id, int32_t port_type, int32_t index, const void* params);
++	int scePadGetHandle(int32_t user_id, int32_t port_type, int32_t index);
++	int scePadRead(int32_t handle, void* samples, int32_t capacity);
++	int scePadClose(int32_t handle);
++	int scePadSetVibrationMode(int32_t handle, int32_t mode);
++	int scePadSetVibration(int32_t handle, const void* vibration);
++	int scePadSetLightBar(int32_t handle, const void* color);
++
++	int sceAudioOutInit(void);
++	int sceAudioOutOpen(int32_t user, int32_t type, int32_t index, uint32_t grain, uint32_t rate, uint32_t format);
++	int sceAudioOutOutput(int32_t port, const void* samples);
++	int sceAudioOutClose(int32_t port);
++
++	int sceKernelUsleep(uint32_t microseconds);
++}
++
++namespace ps5
++{
++	// One pad sample as the console writes it (120 bytes)
++	struct pad_sample
++	{
++		uint32_t buttons;
++		uint8_t left_x, left_y, right_x, right_y, l2, r2;
++		uint8_t reserved[66];
++		int32_t connected;
++		uint64_t timestamp_us;
++		uint8_t extension[16];
++		uint8_t connected_count;
++		uint8_t remaining[15];
++	};
++	static_assert(sizeof(pad_sample) == 120);
++	static_assert(offsetof(pad_sample, connected) == 0x4c);
++
++	enum pad_button : uint32_t
++	{
++		PAD_L3 = 0x000002,
++		PAD_R3 = 0x000004,
++		PAD_OPTIONS = 0x000008,
++		PAD_UP = 0x000010,
++		PAD_RIGHT = 0x000020,
++		PAD_DOWN = 0x000040,
++		PAD_LEFT = 0x000080,
++		PAD_L2 = 0x000100,
++		PAD_R2 = 0x000200,
++		PAD_L1 = 0x000400,
++		PAD_R1 = 0x000800,
++		PAD_TRIANGLE = 0x001000,
++		PAD_CIRCLE = 0x002000,
++		PAD_CROSS = 0x004000,
++		PAD_SQUARE = 0x008000,
++		PAD_TOUCH_PAD = 0x100000,
++		PAD_INTERCEPTED = 0x80000000u, // the system has the pad (PS button menu)
++	};
++
++	// Two-motor rumble (the other mode is the DualSense's haptics)
++	constexpr int32_t PAD_VIBRATION_COMPATIBLE = 2;
++
++	// sceAudioOutOpen
++	constexpr int32_t AUDIO_OUT_USER_SYSTEM = 0xff;
++	constexpr uint32_t AUDIO_OUT_S16_STEREO = 1;
++	constexpr uint32_t AUDIO_OUT_FLOAT_STEREO = 4;
++}
+--- /dev/null
++++ b/ps5/dependencies/NativeCurl.cmake
+@@ -0,0 +1,36 @@
++include_guard(GLOBAL)
++if(NOT PS5 OR NOT TARGET libcurl_static)
++    message(FATAL_ERROR "Native curl compatibility requires the bundled static target")
++endif()
++get_target_property(_curl_source_dir libcurl_static SOURCE_DIR)
++set(_curl_original "${_curl_source_dir}/vtls/wolfssl.c")
++file(READ "${_curl_original}" _curl_text)
++set(_curl_before "#ifdef OPENSSL_EXTRA\n#define wssl_CTX_set1_groups_list wolfSSL_CTX_set1_groups_list")
++set(_curl_after "#if defined(OPENSSL_EXTRA) && defined(WOLFSSL_TLS13)\n#define wssl_CTX_set1_groups_list wolfSSL_CTX_set1_groups_list")
++string(REPLACE "${_curl_before}" "${_curl_after}" _curl_adapted "${_curl_text}")
++if(_curl_adapted STREQUAL _curl_text)
++    message(FATAL_ERROR "Review curl's wolfSSL groups/curves API guard")
++endif()
++get_target_property(_curl_sources libcurl_static SOURCES)
++set(_curl_matches 0)
++foreach(_source IN LISTS _curl_sources)
++    get_filename_component(_name "${_source}" NAME)
++    if(_name STREQUAL "wolfssl.c")
++        list(REMOVE_ITEM _curl_sources "${_source}")
++        math(EXPR _curl_matches "${_curl_matches} + 1")
++    endif()
++endforeach()
++if(NOT _curl_matches EQUAL 1)
++    message(FATAL_ERROR "Review curl's static TLS source list")
++endif()
++set_property(TARGET libcurl_static PROPERTY SOURCES "${_curl_sources}")
++set(_curl_native "${CMAKE_CURRENT_BINARY_DIR}/ps5-curl-wolfssl.c")
++if(EXISTS "${_curl_native}")
++    file(READ "${_curl_native}" _curl_previous)
++endif()
++if(NOT EXISTS "${_curl_native}" OR NOT _curl_previous STREQUAL _curl_adapted)
++    file(WRITE "${_curl_native}" "${_curl_adapted}")
++endif()
++target_sources(libcurl_static PRIVATE "${_curl_native}")
++target_include_directories(libcurl_static PRIVATE "${_curl_source_dir}" "${_curl_source_dir}/vtls")
++set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${_curl_original}")
+--- /dev/null
++++ b/ps5/dependencies/NativeHidapi.cmake
+@@ -0,0 +1,30 @@
++include_guard(GLOBAL)
++if(NOT PS5 OR NOT TARGET hidapi_libusb)
++    message(FATAL_ERROR "Native HID compatibility requires the libusb target")
++endif()
++get_target_property(_hid_source_dir hidapi_libusb SOURCE_DIR)
++set(_hid_original "${_hid_source_dir}/hid.c")
++file(READ "${_hid_original}" _hid_source)
++set(_hid_old_guard "#if defined(__FreeBSD__) && __FreeBSD__ < 10")
++string(REPLACE "${_hid_old_guard}" "#if defined(__FreeBSD__) && __FreeBSD__ < 10 && !defined(LIBUSB_API_VERSION)"
++    _hid_adapted "${_hid_source}")
++if(_hid_adapted STREQUAL _hid_source)
++    message(FATAL_ERROR "Review the pinned HIDAPI legacy libusb compatibility guard")
++endif()
++get_target_property(_hid_sources hidapi_libusb SOURCES)
++list(FIND _hid_sources hid.c _hid_source_index)
++if(_hid_source_index LESS 0)
++    message(FATAL_ERROR "Review the pinned HIDAPI source list")
++endif()
++list(REMOVE_AT _hid_sources ${_hid_source_index})
++set_property(TARGET hidapi_libusb PROPERTY SOURCES "${_hid_sources}")
++set(_hid_native "${CMAKE_CURRENT_BINARY_DIR}/ps5-hidapi-libusb.c")
++if(EXISTS "${_hid_native}")
++    file(READ "${_hid_native}" _hid_previous)
++endif()
++if(NOT EXISTS "${_hid_native}" OR NOT _hid_previous STREQUAL _hid_adapted)
++    file(WRITE "${_hid_native}" "${_hid_adapted}")
++endif()
++target_sources(hidapi_libusb PRIVATE "${_hid_native}")
++target_include_directories(hidapi_libusb PRIVATE "${_hid_source_dir}")
++set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${_hid_original}")
+--- /dev/null
++++ b/ps5/graphics/PS5Graphics.cmake
+@@ -0,0 +1,129 @@
++include_guard(GLOBAL)
++set(RPCS3_PS5_RUNTIME_EXTENSION_ROOT "${RPCS3_PS5_RUNTIME_EXTENSION_ROOT}" CACHE PATH
++    "Reviewed native memory and TLS extension objects")
++set(_runtime_namespace_inputs)
++if(RPCS3_PS5_RUNTIME_EXTENSION_ROOT)
++    foreach(_name cxa threads shm)
++        set(_object "${RPCS3_PS5_RUNTIME_EXTENSION_ROOT}/objects/${_name}.o")
++        if(NOT EXISTS "${_object}")
++            message(FATAL_ERROR "Build the reviewed PS5 runtime extension first: ${_object}")
++        endif()
++        list(APPEND _runtime_namespace_inputs --external "${_object}")
++    endforeach()
++endif()
++
++foreach(name OPENGL_ROOT RADV_ROOT VULKAN_ROOT GLEW_ROOT VOLK_ROOT)
++    set(RPCS3_PS5_${name} "${RPCS3_PS5_${name}}" CACHE PATH "PS5 graphics dependency ${name}")
++    if(NOT IS_DIRECTORY "${RPCS3_PS5_${name}}")
++        message(FATAL_ERROR "Set RPCS3_PS5_${name} to the pinned native graphics dependency")
++    endif()
++endforeach()
++
++find_package(PS5OpenGL CONFIG REQUIRED
++    PATHS "${RPCS3_PS5_OPENGL_ROOT}/lib/cmake/PS5OpenGL"
++    NO_DEFAULT_PATH NO_CMAKE_FIND_ROOT_PATH)
++add_library(rpcs3_ps5_opengl INTERFACE)
++target_link_libraries(rpcs3_ps5_opengl INTERFACE PS5OpenGL::OpenGL)
++add_library(RPCS3::PS5OpenGL ALIAS rpcs3_ps5_opengl)
++
++add_library(rpcs3_ps5_glew STATIC "${RPCS3_PS5_GLEW_ROOT}/src/glew.c")
++add_library(rpcs3_ps5_egl_proc STATIC "${CMAKE_CURRENT_LIST_DIR}/egl_proc.c")
++target_link_libraries(rpcs3_ps5_egl_proc PUBLIC RPCS3::PS5OpenGL)
++target_include_directories(rpcs3_ps5_glew SYSTEM PUBLIC "${RPCS3_PS5_GLEW_ROOT}/include")
++target_compile_definitions(rpcs3_ps5_glew PUBLIC GLEW_STATIC GLEW_EGL GLEW_NO_GLU)
++target_compile_definitions(rpcs3_ps5_glew PRIVATE eglGetProcAddress=rpcs3_ps5_egl_get_proc_address)
++target_compile_options(rpcs3_ps5_glew PRIVATE "-include" "${CMAKE_CURRENT_LIST_DIR}/egl_forward.h")
++target_link_libraries(rpcs3_ps5_glew PUBLIC rpcs3_ps5_egl_proc RPCS3::PS5OpenGL)
++add_library(RPCS3::PS5GLEW ALIAS rpcs3_ps5_glew)
++
++set(_radv_archive "${RPCS3_PS5_RADV_ROOT}/lib/libvulkan_radeon.ps5.a")
++if(NOT EXISTS "${_radv_archive}")
++    message(FATAL_ERROR "Build the pinned PS5 RADV release archive first: ${_radv_archive}")
++endif()
++find_program(RPCS3_PS5_HOST_PYTHON NAMES python3 REQUIRED NO_CMAKE_FIND_ROOT_PATH)
++execute_process(COMMAND "${RPCS3_PS5_HOST_PYTHON}"
++    "${CMAKE_CURRENT_LIST_DIR}/namespace_radv.py"
++    --archive "${_radv_archive}" --libc "${PS5_PAYLOAD_SDK}/target/lib/libc.a"
++    --nm "${PS5_PAYLOAD_SDK}/bin/llvm-nm"
++    --objcopy "${PS5_PAYLOAD_SDK}/bin/llvm-objcopy"
++    --output "${CMAKE_BINARY_DIR}/ps5-radv-private/libvulkan_radeon.ps5.a"
++    OUTPUT_VARIABLE _vk_namespace_json ERROR_VARIABLE _vk_namespace_error
++    RESULT_VARIABLE _vk_namespace_status)
++if(NOT _vk_namespace_status EQUAL 0)
++    message(FATAL_ERROR "PS5 RADV/C11 namespace preparation failed: ${_vk_namespace_error}")
++endif()
++string(JSON _radv_archive GET "${_vk_namespace_json}" archive)
++execute_process(COMMAND "${RPCS3_PS5_HOST_PYTHON}"
++    "${CMAKE_CURRENT_LIST_DIR}/namespace_opengl.py"
++    --sdk "${RPCS3_PS5_OPENGL_ROOT}" --external "${_radv_archive}"
++    --external "${PS5_PAYLOAD_SDK}/target/lib/libps5platform.a"
++    --external "${PS5_PAYLOAD_SDK}/target/lib/libc.a"
++    ${_runtime_namespace_inputs}
++    --nm "${PS5_PAYLOAD_SDK}/bin/llvm-nm"
++    --objcopy "${PS5_PAYLOAD_SDK}/bin/llvm-objcopy"
++    --output "${CMAKE_BINARY_DIR}/ps5-opengl-private"
++    OUTPUT_VARIABLE _gl_namespace_json ERROR_VARIABLE _gl_namespace_error
++    RESULT_VARIABLE _gl_namespace_status)
++if(NOT _gl_namespace_status EQUAL 0)
++    message(FATAL_ERROR "PS5 OpenGL/Mesa namespace preparation failed: ${_gl_namespace_error}")
++endif()
++string(JSON _gl_private_script GET "${_gl_namespace_json}" script)
++execute_process(COMMAND "${RPCS3_PS5_HOST_PYTHON}"
++    "${CMAKE_CURRENT_LIST_DIR}/prepare_agc_imports.py"
++    --sdk "${PS5_PAYLOAD_SDK}" --driver-root "${RPCS3_PS5_VULKAN_ROOT}"
++    --opengl-root "${RPCS3_PS5_OPENGL_ROOT}"
++    --output "${CMAKE_BINARY_DIR}/ps5-agc-imports"
++    OUTPUT_VARIABLE _agc_json ERROR_VARIABLE _agc_error RESULT_VARIABLE _agc_status)
++if(NOT _agc_status EQUAL 0)
++    message(FATAL_ERROR "PS5 AGC import descriptor preparation failed: ${_agc_error}")
++endif()
++string(JSON _agc_driver GET "${_agc_json}" driver)
++get_target_property(_gl_link_libraries PS5OpenGL::OpenGL INTERFACE_LINK_LIBRARIES)
++list(FIND _gl_link_libraries "${RPCS3_PS5_OPENGL_ROOT}/lib/libPS5OpenGL.a" _gl_script_index)
++if(_gl_script_index LESS 0)
++    message(FATAL_ERROR "Unexpected PS5OpenGL package link interface; review this SDK release")
++endif()
++list(REMOVE_AT _gl_link_libraries ${_gl_script_index})
++list(INSERT _gl_link_libraries ${_gl_script_index} "${_gl_private_script}")
++list(FIND _gl_link_libraries "${RPCS3_PS5_OPENGL_ROOT}/lib/libSceAgcDriver.so" _agc_index)
++if(_agc_index LESS 0)
++    message(FATAL_ERROR "Unexpected PS5OpenGL AGC import descriptor; review this SDK release")
++endif()
++list(REMOVE_AT _gl_link_libraries ${_agc_index})
++list(INSERT _gl_link_libraries ${_agc_index} "${_agc_driver}")
++set_property(TARGET PS5OpenGL::OpenGL PROPERTY INTERFACE_LINK_LIBRARIES "${_gl_link_libraries}")
++
++execute_process(COMMAND "${CMAKE_COMMAND}" -E env "PS5_CLANG=${CMAKE_C_COMPILER}"
++    "${RPCS3_PS5_HOST_PYTHON}" "${CMAKE_CURRENT_LIST_DIR}/radv_recipe.py"
++    --driver-root "${RPCS3_PS5_VULKAN_ROOT}" --sdk "${PS5_PAYLOAD_SDK}" --archive "${_radv_archive}"
++    OUTPUT_VARIABLE _radv_json ERROR_VARIABLE _radv_error RESULT_VARIABLE _radv_status)
++if(NOT _radv_status EQUAL 0)
++    message(FATAL_ERROR "PS5 RADV link recipe failed: ${_radv_error}")
++endif()
++add_library(rpcs3_ps5_volk STATIC "${RPCS3_PS5_VOLK_ROOT}/volk.c")
++target_include_directories(rpcs3_ps5_volk SYSTEM PUBLIC
++    "${RPCS3_PS5_VOLK_ROOT}" "${RPCS3_PS5_RADV_ROOT}/include")
++target_compile_definitions(rpcs3_ps5_volk PUBLIC VK_NO_PROTOTYPES=1)
++
++add_library(rpcs3_ps5_vulkan STATIC
++    "${CMAKE_CURRENT_LIST_DIR}/vulkan_runtime.cpp"
++    "${CMAKE_CURRENT_LIST_DIR}/display_surface.cpp")
++target_compile_features(rpcs3_ps5_vulkan PUBLIC cxx_std_20)
++target_compile_definitions(rpcs3_ps5_vulkan PUBLIC RPCS3_PS5=1 VK_NO_PROTOTYPES=1)
++target_link_libraries(rpcs3_ps5_vulkan PUBLIC rpcs3_ps5_volk)
++foreach(kind libraries options)
++    string(JSON _count LENGTH "${_radv_json}" ${kind})
++    math(EXPR _last "${_count} - 1")
++    foreach(index RANGE 0 ${_last})
++        string(JSON _item GET "${_radv_json}" ${kind} ${index})
++        if(kind STREQUAL "libraries")
++            target_link_libraries(rpcs3_ps5_vulkan PUBLIC "${_item}")
++        else()
++            target_link_options(rpcs3_ps5_vulkan PUBLIC "${_item}")
++        endif()
++    endforeach()
++endforeach()
++add_library(RPCS3::PS5Vulkan ALIAS rpcs3_ps5_vulkan)
++if(NOT TARGET Vulkan::Vulkan)
++    add_library(Vulkan::Vulkan ALIAS rpcs3_ps5_vulkan)
++endif()
+--- /dev/null
++++ b/ps5/graphics/build_runtime_extension.py
+@@ -0,0 +1,56 @@
++"""Build reviewed SDK memory/TLS extensions without replacing the installed SDK."""
++import argparse
++import hashlib
++import json
++import os
++import subprocess
++from pathlib import Path
++
++parser = argparse.ArgumentParser(description=__doc__)
++parser.add_argument('--repository', type=Path, required=True)
++parser.add_argument('--sdk', type=Path, required=True)
++parser.add_argument('--output', type=Path, required=True)
++args = parser.parse_args()
++revision = 'b5efad528e0ac1b8289f39d72a0e890ff68ff0a6'
++output = args.output.resolve()
++for directory in ['source', 'include/ps5platform', 'objects']:
++    (output / directory).mkdir(parents=True, exist_ok=True)
++def source(name):
++    return subprocess.check_output(['git', '-C', str(args.repository), 'show', revision + ':platform/' + name])
++header = source('include/ps5platform/shm.h').decode()
++field = '   uint64_t committed_bytes; /* ps5_vrange_commit\'s units */\n'
++if header.count(field) != 1: raise RuntimeError('Review the pinned shared-memory stats ABI')
++header = header.replace(field, '')
++(output / 'include/ps5platform/shm.h').write_text(header)
++records = []
++environment = dict(os.environ)
++environment['PATH'] = '/usr/local/bin:/usr/bin:/bin'
++for name in ['cxa', 'threads', 'shm']:
++    original = source('src/' + name + '.c')
++    text = original.decode()
++    if name == 'shm':
++        line = '   stats->committed_bytes = atomic_load(&committed_bytes);\n'
++        if text.count(line) != 1: raise RuntimeError('Review the pinned shared-memory stats writer')
++        text = text.replace(line, '')
++    path = output / 'source' / (name + '.c')
++    path.write_text(text)
++    command = [str(args.sdk / 'bin/prospero-clang'), '-std=c11', '-O2', '-Wall', '-Wextra', '-Werror',
++        '-fPIC', '-ffunction-sections', '-fdata-sections', '-I' + str(output / 'include'),
++        '-I' + str(args.repository / 'platform/include'), '-I' + str(args.repository / 'platform/src'),
++        '-c', str(path), '-o', str(output / 'objects' / (name + '.o'))]
++    result = subprocess.run(command, env=environment, capture_output=True, text=True)
++    log = result.stdout + result.stderr
++    (output / (name + '.compile.log')).write_text(log)
++    records.append({'file': 'platform/src/' + name + '.c', 'source_revision': revision,
++                    'original_sha256': hashlib.sha256(original).hexdigest(),
++                    'adapted_sha256': hashlib.sha256(text.encode()).hexdigest(),
++                    'object': str(output / 'objects' / (name + '.o')), 'command': command,
++                    'returncode': result.returncode})
++    print(json.dumps({'step': 'native-runtime-' + name, 'returncode': result.returncode, 'output': log[-3000:]}), flush=True)
++    if result.returncode: raise SystemExit(result.returncode)
++report = {'source_url': 'https://github.com/lavavex/PS5_PayloadSDK/tree/' + revision,
++          'revision': revision, 'objects': records, 'sdk_replaced': False,
++          'shared_memory_stats_abi': 'Preserves the existing six uint64_t fields (48 bytes); no extended stats writer is exported',
++          'device_tested': False}
++(output / 'manifest.json').write_text(json.dumps(report, indent=2) + '\n')
++(Path(__file__).resolve().parents[1] / 'runtime-extension-build.json').write_text(json.dumps(report, indent=2) + '\n')
+--- /dev/null
++++ b/ps5/graphics/display_surface.cpp
+@@ -0,0 +1,131 @@
++#include "vulkan_runtime.h"
++#include <algorithm>
++#include <cstdint>
++#include <limits>
++#include <vector>
++
++namespace
++{
++    template <typename T, typename Enumerate>
++    VkResult enumerate(std::vector<T>& values, Enumerate query)
++    {
++        for (unsigned retry = 0; retry != 4; ++retry)
++        {
++            std::uint32_t count = 0;
++            VkResult result = query(&count, nullptr);
++            if (result != VK_SUCCESS && result != VK_INCOMPLETE)
++                return result;
++            if (count > 4096)
++                return VK_ERROR_INITIALIZATION_FAILED;
++            values.resize(count);
++            if (!count)
++                return VK_SUCCESS;
++            result = query(&count, values.data());
++            if (result == VK_SUCCESS)
++            {
++                values.resize(count);
++                return VK_SUCCESS;
++            }
++            if (result != VK_INCOMPLETE)
++                return result;
++        }
++        return VK_INCOMPLETE;
++    }
++}
++
++namespace rpcs3::ps5
++{
++    VkResult create_display_surface(VkInstance instance, VkPhysicalDevice gpu,
++                                    VkSurfaceKHR* surface)
++    {
++        if (!surface)
++            return VK_ERROR_INITIALIZATION_FAILED;
++        *surface = VK_NULL_HANDLE;
++        if (!vkGetPhysicalDeviceDisplayPropertiesKHR || !vkGetDisplayModePropertiesKHR ||
++            !vkGetPhysicalDeviceDisplayPlanePropertiesKHR || !vkGetDisplayPlaneSupportedDisplaysKHR ||
++            !vkGetDisplayPlaneCapabilitiesKHR || !vkCreateDisplayPlaneSurfaceKHR)
++            return VK_ERROR_EXTENSION_NOT_PRESENT;
++
++        std::vector<VkDisplayPropertiesKHR> displays;
++        VkResult result = enumerate(displays, [&](auto count, auto data)
++        { return vkGetPhysicalDeviceDisplayPropertiesKHR(gpu, count, data); });
++        if (result != VK_SUCCESS)
++            return result;
++        std::vector<VkDisplayPlanePropertiesKHR> planes;
++        result = enumerate(planes, [&](auto count, auto data)
++        { return vkGetPhysicalDeviceDisplayPlanePropertiesKHR(gpu, count, data); });
++        if (result != VK_SUCCESS)
++            return result;
++
++        for (const auto& display : displays)
++        {
++            // Prefer the display's native extent and approximately 60 Hz. Only
++            // modes actually enumerated by RADV/VideoOut are ever selected.
++            std::vector<VkDisplayModePropertiesKHR> modes;
++            result = enumerate(modes, [&](auto count, auto data)
++            { return vkGetDisplayModePropertiesKHR(gpu, display.display, count, data); });
++            if (result != VK_SUCCESS)
++                return result;
++            auto score = [&](const VkDisplayModePropertiesKHR& mode)
++            {
++                const auto& p = mode.parameters;
++                const bool native = p.visibleRegion.width == display.physicalResolution.width &&
++                                    p.visibleRegion.height == display.physicalResolution.height;
++                const auto hz = static_cast<std::int64_t>(p.refreshRate);
++                return (native ? std::int64_t{0} : std::int64_t{1} << 40) +
++                       (hz >= 60000 ? hz - 60000 : 60000 - hz);
++            };
++            std::stable_sort(modes.begin(), modes.end(), [&](const auto& left, const auto& right)
++            { return score(left) < score(right); });
++            for (std::uint32_t plane = 0; plane < planes.size(); ++plane)
++            {
++                if (planes[plane].currentDisplay != VK_NULL_HANDLE &&
++                    planes[plane].currentDisplay != display.display)
++                    continue;
++                std::vector<VkDisplayKHR> supported;
++                result = enumerate(supported, [&](auto count, auto data)
++                { return vkGetDisplayPlaneSupportedDisplaysKHR(gpu, plane, count, data); });
++                if (result != VK_SUCCESS)
++                    return result;
++                if (std::find(supported.begin(), supported.end(), display.display) == supported.end())
++                    continue;
++                if (!(display.supportedTransforms & VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR))
++                    continue;
++                for (const auto& mode : modes)
++                {
++                    VkDisplayPlaneCapabilitiesKHR caps{};
++                    result = vkGetDisplayPlaneCapabilitiesKHR(gpu, mode.displayMode, plane, &caps);
++                    if (result != VK_SUCCESS)
++                        return result;
++                    const auto extent = mode.parameters.visibleRegion;
++                    if (!extent.width || !extent.height ||
++                        extent.width < caps.minSrcExtent.width || extent.width > caps.maxSrcExtent.width ||
++                        extent.height < caps.minSrcExtent.height || extent.height > caps.maxSrcExtent.height ||
++                        extent.width < caps.minDstExtent.width || extent.width > caps.maxDstExtent.width ||
++                        extent.height < caps.minDstExtent.height || extent.height > caps.maxDstExtent.height ||
++                        caps.minDstPosition.x > 0 || caps.maxDstPosition.x < 0 ||
++                        caps.minDstPosition.y > 0 || caps.maxDstPosition.y < 0 ||
++                        caps.minSrcPosition.x > 0 || caps.maxSrcPosition.x < 0 ||
++                        caps.minSrcPosition.y > 0 || caps.maxSrcPosition.y < 0 ||
++                        !(caps.supportedAlpha & VK_DISPLAY_PLANE_ALPHA_OPAQUE_BIT_KHR))
++                        continue;
++                    VkDisplaySurfaceCreateInfoKHR info{};
++                    info.sType = VK_STRUCTURE_TYPE_DISPLAY_SURFACE_CREATE_INFO_KHR;
++                    info.displayMode = mode.displayMode;
++                    info.planeIndex = plane;
++                    info.planeStackIndex = planes[plane].currentStackIndex;
++                    info.transform = VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR;
++                    info.globalAlpha = 1.0f;
++                    info.alphaMode = VK_DISPLAY_PLANE_ALPHA_OPAQUE_BIT_KHR;
++                    info.imageExtent = extent;
++                    VkSurfaceKHR created = VK_NULL_HANDLE;
++                    result = vkCreateDisplayPlaneSurfaceKHR(instance, &info, nullptr, &created);
++                    if (result == VK_SUCCESS)
++                        *surface = created;
++                    return result;
++                }
++            }
++        }
++        return VK_ERROR_INITIALIZATION_FAILED;
++    }
++}
+--- /dev/null
++++ b/ps5/graphics/egl_forward.h
+@@ -0,0 +1,6 @@
++#pragma once
++// GLEW's generic EGL extension declarations mention these opaque types even
++// when Wayland is not used. Keep C prototypes at file scope without GLX/Wayland.
++struct wl_display;
++struct wl_resource;
++struct wl_buffer;
+--- /dev/null
++++ b/ps5/graphics/egl_proc.c
+@@ -0,0 +1,52 @@
++#include "egl_proc.h"
++#include <string.h>
++
++EGLAPI __eglMustCastToProperFunctionPointerType EGLAPIENTRY
++rpcs3_ps5_egl_get_proc_address(const char* name)
++{
++    if (!name)
++        return NULL;
++    // The native SDK's resolver is a GL dispatch resolver. GLEW's EGL path
++    // also requests EGL core functions, including its bootstrap display call.
++    // These are real SDK entry points, not replacements for their behavior.
++#define EGL_ENTRY(function) \
++    if (strcmp(name, #function) == 0) \
++        return (__eglMustCastToProperFunctionPointerType)function
++    EGL_ENTRY(eglBindAPI);
++    EGL_ENTRY(eglBindTexImage);
++    EGL_ENTRY(eglChooseConfig);
++    EGL_ENTRY(eglCopyBuffers);
++    EGL_ENTRY(eglCreateContext);
++    EGL_ENTRY(eglCreatePbufferFromClientBuffer);
++    EGL_ENTRY(eglCreatePbufferSurface);
++    EGL_ENTRY(eglCreatePixmapSurface);
++    EGL_ENTRY(eglCreateWindowSurface);
++    EGL_ENTRY(eglDestroyContext);
++    EGL_ENTRY(eglDestroySurface);
++    EGL_ENTRY(eglGetConfigAttrib);
++    EGL_ENTRY(eglGetConfigs);
++    EGL_ENTRY(eglGetCurrentContext);
++    EGL_ENTRY(eglGetCurrentDisplay);
++    EGL_ENTRY(eglGetCurrentSurface);
++    EGL_ENTRY(eglGetDisplay);
++    EGL_ENTRY(eglGetError);
++    EGL_ENTRY(eglInitialize);
++    EGL_ENTRY(eglMakeCurrent);
++    EGL_ENTRY(eglQueryAPI);
++    EGL_ENTRY(eglQueryContext);
++    EGL_ENTRY(eglQueryString);
++    EGL_ENTRY(eglQuerySurface);
++    EGL_ENTRY(eglReleaseTexImage);
++    EGL_ENTRY(eglReleaseThread);
++    EGL_ENTRY(eglSurfaceAttrib);
++    EGL_ENTRY(eglSwapBuffers);
++    EGL_ENTRY(eglSwapInterval);
++    EGL_ENTRY(eglTerminate);
++    EGL_ENTRY(eglWaitClient);
++    EGL_ENTRY(eglWaitGL);
++    EGL_ENTRY(eglWaitNative);
++#undef EGL_ENTRY
++    if (strcmp(name, "eglGetProcAddress") == 0)
++        return (__eglMustCastToProperFunctionPointerType)rpcs3_ps5_egl_get_proc_address;
++    return eglGetProcAddress(name);
++}
+--- /dev/null
++++ b/ps5/graphics/egl_proc.h
+@@ -0,0 +1,10 @@
++#pragma once
++#include <EGL/egl.h>
++#ifdef __cplusplus
++extern "C" {
++#endif
++EGLAPI __eglMustCastToProperFunctionPointerType EGLAPIENTRY
++rpcs3_ps5_egl_get_proc_address(const char* name);
++#ifdef __cplusplus
++}
++#endif
+--- /dev/null
++++ b/ps5/graphics/namespace_opengl.py
+@@ -0,0 +1,85 @@
++"""Keep the two pinned Mesa builds independent in a single native executable.
++
++Only definitions shared with RADV/platform are renamed, in private copies of
++every archive in the SDK GROUP. References are rewritten with the same map.
++Public GL/EGL/PS5 entry points and the original SDK are preserved.
++"""
++import argparse
++import hashlib
++import json
++import re
++import subprocess
++from pathlib import Path
++
++parser = argparse.ArgumentParser(description=__doc__)
++parser.add_argument('--sdk', type=Path, required=True)
++parser.add_argument('--external', type=Path, action='append', required=True)
++parser.add_argument('--nm', required=True)
++parser.add_argument('--objcopy', required=True)
++parser.add_argument('--output', type=Path, required=True)
++args = parser.parse_args()
++library = args.sdk.resolve(strict=True) / 'lib'
++output = args.output.resolve()
++if output == library or library in output.parents:
++    parser.error('Private archives must be outside the original SDK')
++script = (library / 'libPS5OpenGL.a').read_text()
++names = re.findall(r'\blib[A-Za-z0-9_.+-]+\.a\b', script)
++if not names or len(names) != len(set(names)):
++    parser.error('Unexpected OpenGL GROUP script; review this SDK release')
++archives = [library / name for name in names]
++
++def digest(path):
++    return hashlib.file_digest(path.open('rb'), 'sha256').hexdigest()
++
++def definitions(paths):
++    text = subprocess.run([args.nm, '--defined-only', '--extern-only', *map(str, paths)],
++                          check=True, capture_output=True, text=True).stdout
++    found = set()
++    for line in text.splitlines():
++        words = line.split()
++        if len(words) >= 2 and len(words[-2]) == 1 and words[-2].isalpha():
++            found.add(words[-1])
++    return found
++
++inputs = {str(path): digest(path) for path in [*archives, *args.external]}
++inputs['script'] = hashlib.sha256(script.encode()).hexdigest()
++inputs['adapter'] = digest(Path(__file__))
++manifest = output / 'namespace.json'
++if manifest.exists():
++    cached = json.loads(manifest.read_text())
++    if cached.get('inputs') == inputs and all((output / name).is_file() and
++            digest(output / name) == sha for name, sha in cached['outputs'].items()):
++        print(json.dumps({'script': str(output / 'libPS5OpenGL.a'),
++                          'renamed': cached['renamed'], 'cached': True}))
++        raise SystemExit(0)
++
++original = definitions(archives)
++external = definitions(args.external)
++common = sorted(original & external)
++public = lambda name: bool(re.match(r'^(gl|egl)[A-Z]', name)) or name.startswith('ps5_')
++if any(public(name) for name in common):
++    parser.error('A public API collides; review it instead of renaming an ABI entry point')
++prefix = 'rpcs3_ps5_gl_private_'
++if any(name.startswith(prefix) for name in original | external):
++    parser.error('Reserved namespace already exists in the inputs')
++output.mkdir(parents=True, exist_ok=True)
++mapping = output / 'symbols.map'
++mapping.write_text(''.join(f'{name} {prefix}{name}\n' for name in common))
++for archive in archives:
++    temporary = output / (archive.name + '.tmp')
++    subprocess.run([args.objcopy, '--redefine-syms=' + str(mapping),
++                    str(archive), str(temporary)], check=True, capture_output=True)
++    temporary.replace(output / archive.name)
++
++rewritten = definitions([output / name for name in names])
++if (rewritten & set(common) or
++        {prefix + name for name in common} - rewritten or
++        {name for name in original if public(name)} != {name for name in rewritten if public(name)}):
++    raise RuntimeError('Namespace verification failed; no new manifest was published')
++(output / 'libPS5OpenGL.a').write_text(script)
++report = {'inputs': inputs, 'renamed': len(common), 'symbols': common,
++          'public_entry_points_preserved': True, 'shared_private_definitions_remaining': 0,
++          'outputs': {name: digest(output / name) for name in [*names, 'libPS5OpenGL.a']}}
++manifest.write_text(json.dumps(report, indent=2) + '\n')
++print(json.dumps({'script': str(output / 'libPS5OpenGL.a'),
++                  'renamed': len(common), 'cached': False}))
+--- /dev/null
++++ b/ps5/graphics/namespace_radv.py
+@@ -0,0 +1,61 @@
++"""Isolate Mesa's C11 thread emulation from the payload SDK's C11 ABI."""
++import argparse
++import hashlib
++import json
++import re
++import subprocess
++from pathlib import Path
++
++parser = argparse.ArgumentParser(description=__doc__)
++parser.add_argument('--archive', type=Path, required=True)
++parser.add_argument('--libc', type=Path, required=True)
++parser.add_argument('--nm', required=True)
++parser.add_argument('--objcopy', required=True)
++parser.add_argument('--output', type=Path, required=True)
++args = parser.parse_args()
++archive = args.archive.resolve(strict=True)
++output = args.output.resolve()
++if output == archive or archive.parent == output.parent:
++    parser.error('Use a private output directory, outside the original RADV installation')
++
++def digest(path):
++    with path.open('rb') as stream:
++        return hashlib.file_digest(stream, 'sha256').hexdigest()
++
++def definitions(path):
++    text = subprocess.run([args.nm, '--defined-only', '--extern-only', str(path)],
++                          check=True, capture_output=True, text=True).stdout
++    return {words[-1] for line in text.splitlines()
++            if len(words := line.split()) >= 2 and len(words[-2]) == 1 and words[-2].isalpha()}
++
++inputs = {str(path): digest(path) for path in [archive, args.libc, Path(__file__)]}
++manifest = output.with_suffix('.namespace.json')
++if manifest.exists() and output.exists():
++    cached = json.loads(manifest.read_text())
++    if cached.get('inputs') == inputs and cached.get('output_sha256') == digest(output):
++        print(json.dumps({'archive': str(output), 'renamed': cached['renamed'], 'cached': True}))
++        raise SystemExit(0)
++original = definitions(archive)
++common = sorted(original & definitions(args.libc))
++if any(not re.fullmatch(r'call_once|(?:cnd|mtx|thrd|tss)_[A-Za-z0-9_]+', name) for name in common):
++    parser.error('Unexpected non-C11 collision with SDK libc: ' + ', '.join(common))
++prefix = 'rpcs3_ps5_vk_private_'
++if any(name.startswith(prefix) for name in original):
++    parser.error('Reserved namespace already exists')
++output.parent.mkdir(parents=True, exist_ok=True)
++mapping = output.with_suffix('.symbols.map')
++mapping.write_text(''.join(f'{name} {prefix}{name}\n' for name in common))
++temporary = output.with_suffix('.tmp')
++subprocess.run([args.objcopy, '--redefine-syms=' + str(mapping),
++                str(archive), str(temporary)], check=True, capture_output=True)
++rewritten = definitions(temporary)
++if (rewritten & set(common) or {prefix + name for name in common} - rewritten or
++        {name for name in original if name.startswith(('vk', 'radv_'))} !=
++        {name for name in rewritten if name.startswith(('vk', 'radv_'))}):
++    raise RuntimeError('RADV namespace verification failed')
++temporary.replace(output)
++report = {'inputs': inputs, 'renamed': len(common), 'symbols': common,
++          'public_entry_points_preserved': True, 'shared_c11_definitions_remaining': 0,
++          'output_sha256': digest(output)}
++manifest.write_text(json.dumps(report, indent=2) + '\n')
++print(json.dumps({'archive': str(output), 'renamed': len(common), 'cached': False}))
+--- /dev/null
++++ b/ps5/graphics/patch_radv_handoff.py
+@@ -0,0 +1,150 @@
++"""Prepare an isolated RADV WSI source that can return VideoOut to Qt."""
++import argparse
++import difflib
++from pathlib import Path
++
++parser = argparse.ArgumentParser(description=__doc__)
++parser.add_argument('--source', type=Path, required=True)
++parser.add_argument('--output', type=Path, required=True)
++args = parser.parse_args()
++name = 'src/vulkan/wsi/wsi_common_videoout.c'
++original = (args.source / name).read_text()
++text = original
++def replace(before, after):
++    global text
++    if text.count(before) != 1:
++        raise RuntimeError('Review the pinned WSI before patching: ' + before[:90])
++    text = text.replace(before, after, 1)
++
++replace('#include <string.h>', '#include <string.h>\n#include <sys/mman.h>')
++replace('static int\nsceVideoOutSetFlipRate', '''static int
++sceVideoOutClose(int32_t handle)
++{
++   host_shown_argument = 0;
++   return 0;
++}
++
++static int
++sceVideoOutSetFlipRate''')
++replace('      uint8_t *buffers;\n   } sets', '''      uint8_t *buffers;
++      bool registered;
++#if defined(__PROSPERO__)
++      int64_t physical;
++#endif
++   } sets''')
++replace('   bool thread_started;\n', '''   bool thread_started;
++   bool stop_thread;
++   bool releasing;
++   uint32_t active_swapchains;
++''')
++replace('   if (out->opened)\n', '   if (out->releasing)\n      return false;\n   if (out->opened)\n')
++replace('      if (out->sets[i].size == size) {\n', '''      if (out->sets[i].size == size) {
++         if (!out->sets[i].registered)
++            return VK_ERROR_INITIALIZATION_FAILED;
++''')
++replace('   int result = index == 0 ?', '''   /* Track allocations even when registration fails: only a successful
++    * VideoOut close permits releasing memory the display may have seen. */
++   out->sets[index] = (struct wsi_videoout_set){.size = size, .buffers = buffers,
++#if defined(__PROSPERO__)
++                                               .physical = physical,
++#endif
++   };
++   out->set_count = index + 1;
++   int result = index == 0 ?''')
++replace('   out->sets[index] = (struct wsi_videoout_set){.size = size, .buffers = buffers};\n   out->set_count = index + 1;',
++        '   out->sets[index].registered = true;')
++replace('      while (out->queue_count == 0)\n         cnd_wait(&out->changed, &out->lock);', '''      while (out->queue_count == 0 && !out->stop_thread)
++         cnd_wait(&out->changed, &out->lock);
++      if (out->queue_count == 0 && out->stop_thread)
++         break;''')
++replace('   return 0;\n}\n\n/* --- VK_KHR_display', '   mtx_unlock(&out->lock);\n   return 0;\n}\n\n/* --- VK_KHR_display')
++replace('   wsi_swapchain_finish(&chain->base);\n   vk_free(pAllocator, chain);\n   return VK_SUCCESS;', '''   wsi_swapchain_finish(&chain->base);
++   vk_free(pAllocator, chain);
++   mtx_lock(&out->lock);
++   assert(out->active_swapchains > 0);
++   out->active_swapchains--;
++   mtx_unlock(&out->lock);
++   return VK_SUCCESS;''')
++replace('   out->current = chain;\n', '   out->current = chain;\n   out->active_swapchains++;\n')
++text += '''
++/* RPCS3 Qt handoff. Call after destroying all swapchains AND the Vulkan
++ * instance; external synchronization is required against Vulkan creation.
++ * Never grant EGL ownership after a failed close or while images are live.
++ * This is an application integration API, not a Vulkan extension. */
++PUBLIC VkResult wsi_videoout_release_output(void);
++PUBLIC VkResult
++wsi_videoout_release_output(void)
++{
++   call_once(&videoout_once, videoout_output_init_once);
++   struct wsi_videoout_output *out = &videoout_output;
++   mtx_lock(&out->lock);
++   if (out->active_swapchains || out->queue_count || out->releasing) {
++      mtx_unlock(&out->lock);
++      return VK_ERROR_NATIVE_WINDOW_IN_USE_KHR;
++   }
++   out->releasing = true;
++   out->stop_thread = true;
++   cnd_broadcast(&out->changed);
++   const bool join = out->thread_started;
++   const thrd_t thread = out->thread;
++   mtx_unlock(&out->lock);
++   if (join)
++      thrd_join(thread, NULL);
++   mtx_lock(&out->lock);
++   out->thread_started = false;
++   out->stop_thread = false;
++   VkResult result = VK_SUCCESS;
++   if (out->handle >= 0) {
++      if (out->high_frame_rate)
++         sceVideoOutConfigureOutput(out->handle, PS5_VIDEO_OUT_MODE_RESTORE, NULL, NULL, NULL);
++      const int closed = sceVideoOutClose(out->handle);
++      if (closed != 0) {
++         fprintf(stderr, "wsi/videoout: display handoff close failed: 0x%08x\\n", (unsigned)closed);
++         result = VK_ERROR_INITIALIZATION_FAILED;
++         goto done;
++      }
++      out->handle = -1;
++   }
++   out->opened = false;
++   out->high_frame_rate = false;
++   out->modes_settled = false;
++   out->high_mode_offered = false;
++   for (uint32_t i = 0; i < out->set_count; i++) {
++      struct wsi_videoout_set *set = &out->sets[i];
++      const size_t bytes = VIDEOOUT_BUFFERS * set->size->buffer_bytes;
++      set->registered = false;
++      if (set->buffers) {
++         if (munmap(set->buffers, bytes) != 0) {
++            result = VK_ERROR_MEMORY_MAP_FAILED;
++            continue; /* Keep the physical allocation backing a live mapping. */
++         }
++         set->buffers = NULL;
++      }
++#if defined(__PROSPERO__)
++      if (set->physical >= 0) {
++         if (sceKernelReleaseDirectMemory(set->physical, bytes) != 0) {
++            result = VK_ERROR_MEMORY_MAP_FAILED;
++            continue;
++         }
++         set->physical = -1;
++      }
++#endif
++   }
++   if (result == VK_SUCCESS) {
++      memset(out->sets, 0, sizeof(out->sets));
++      out->set_count = 0;
++      memset(out->buffer, 0, sizeof(out->buffer));
++      out->flip_argument = 0;
++      out->queue_head = 0;
++   }
++done:
++   out->releasing = false;
++   mtx_unlock(&out->lock);
++   return result;
++}
++'''
++args.output.parent.mkdir(parents=True, exist_ok=True)
++args.output.write_text(text)
++patch = ''.join(difflib.unified_diff(original.splitlines(True), text.splitlines(True),
++                                    fromfile='a/' + name, tofile='b/' + name))
++(Path(__file__).resolve().parent / 'radv-qt-handoff.patch').write_text(patch)
+--- /dev/null
++++ b/ps5/graphics/prepare_agc_imports.py
+@@ -0,0 +1,55 @@
++"""Build upstream link-only AGC import descriptors, never runtime code."""
++import argparse
++import hashlib
++import json
++import subprocess
++from pathlib import Path
++
++parser = argparse.ArgumentParser(description=__doc__)
++parser.add_argument('--sdk', type=Path, required=True)
++parser.add_argument('--driver-root', type=Path, required=True)
++parser.add_argument('--opengl-root', type=Path, required=True)
++parser.add_argument('--output', type=Path, required=True)
++args = parser.parse_args()
++source = args.driver_root / 'vendor/ps5/sdk/stubs/agc_driver_canary_link_stub.c'
++original = args.opengl_root / 'lib/libSceAgcDriver.so'
++output = args.output.resolve()
++output.mkdir(parents=True, exist_ok=True)
++library = output / 'libSceAgcDriver.so'
++nm = args.sdk / 'bin/llvm-nm'
++
++def digest(path):
++    with path.open('rb') as stream:
++        return hashlib.file_digest(stream, 'sha256').hexdigest()
++
++def imports_named(path):
++    text = subprocess.run([str(nm), '--dynamic', '--defined-only', str(path)],
++                          check=True, capture_output=True, text=True).stdout
++    return {words[-1] for line in text.splitlines()
++            if (words := line.split()) and words[-1].startswith('sceAgcDriver')}
++
++inputs = {str(path): digest(path) for path in [source, original, Path(__file__)]}
++manifest = output / 'imports.json'
++if manifest.exists() and library.exists():
++    cached = json.loads(manifest.read_text())
++    if cached.get('inputs') == inputs and cached.get('stub_sha256') == digest(library):
++        print(json.dumps({'driver': str(library), 'cached': True}))
++        raise SystemExit(0)
++object_file = output / 'libSceAgcDriver_link_only.o'
++subprocess.run([str(args.sdk / 'bin/prospero-clang'), '-std=c11', '-O2', '-fPIC',
++                '-c', str(source), '-o', str(object_file)], check=True, capture_output=True)
++# Same shared descriptor recipe as the pinned tools/build-radv-title.sh.
++# Its bodies remain in this build-only DSO. The application keeps undefined
++# imports, which the PS5 runtime must bind to the actual system module.
++subprocess.run([str(args.sdk / 'bin/prospero-lld'), '--shared', '-soname',
++                'libSceAgcDriver.prx', '-o', str(library), str(object_file)],
++               check=True, capture_output=True)
++before, after = imports_named(original), imports_named(library)
++if before - after or 'sceAgcDriverSetHsOffchipParam' not in after:
++    raise RuntimeError('The upstream descriptor does not cover the original GL imports')
++report = {'inputs': inputs, 'imports': sorted(after), 'added': sorted(after - before),
++          'original_imports_preserved': True, 'stub_sha256': digest(library),
++          'purpose': 'Host-link import descriptor only. Never package or execute this DSO.',
++          'runtime_implementation': 'PS5 system libSceAgcDriver; not the descriptor bodies'}
++manifest.write_text(json.dumps(report, indent=2) + '\n')
++print(json.dumps({'driver': str(library), 'added': sorted(after - before), 'cached': False}))
+--- /dev/null
++++ b/ps5/graphics/radv-qt-handoff.patch
+@@ -0,0 +1,207 @@
++--- a/src/vulkan/wsi/wsi_common_videoout.c
+++++ b/src/vulkan/wsi/wsi_common_videoout.c
++@@ -45,6 +45,7 @@
++ #include <stdio.h>
++ #include <stdlib.h>
++ #include <string.h>
+++#include <sys/mman.h>
++ 
++ #include "c11/threads.h"
++ #include "util/macros.h"
++@@ -104,6 +105,13 @@
++ sceVideoOutOpen(int32_t user, int32_t bus, int32_t index, const void *parameter)
++ {
++    return 1;
+++}
+++
+++static int
+++sceVideoOutClose(int32_t handle)
+++{
+++   host_shown_argument = 0;
+++   return 0;
++ }
++ 
++ static int
++@@ -260,6 +268,10 @@
++    struct wsi_videoout_set {
++       const struct wsi_videoout_size *size;
++       uint8_t *buffers;
+++      bool registered;
+++#if defined(__PROSPERO__)
+++      int64_t physical;
+++#endif
++    } sets[VIDEOOUT_SIZES];
++    uint32_t set_count;
++    /* The argument of the latest flip submitted; each flip's is one more. */
++@@ -277,6 +289,9 @@
++ 
++    /* The flip thread and its queue. */
++    bool thread_started;
+++   bool stop_thread;
+++   bool releasing;
+++   uint32_t active_swapchains;
++    thrd_t thread;
++    struct wsi_videoout_present queue[VIDEOOUT_BUFFERS * 2];
++    uint32_t queue_head, queue_count;
++@@ -366,6 +381,8 @@
++ videoout_open_locked(void)
++ {
++    struct wsi_videoout_output *out = &videoout_output;
+++   if (out->releasing)
+++      return false;
++    if (out->opened)
++       return out->handle >= 0;
++    out->opened = true;
++@@ -452,6 +469,8 @@
++    struct wsi_videoout_output *out = &videoout_output;
++    for (uint32_t i = 0; i < out->set_count; i++) {
++       if (out->sets[i].size == size) {
+++         if (!out->sets[i].registered)
+++            return VK_ERROR_INITIALIZATION_FAILED;
++          *set_out = &out->sets[i];
++          return VK_SUCCESS;
++       }
++@@ -487,6 +506,14 @@
++       return VK_ERROR_OUT_OF_DEVICE_MEMORY;
++ #endif
++ 
+++   /* Track allocations even when registration fails: only a successful
+++    * VideoOut close permits releasing memory the display may have seen. */
+++   out->sets[index] = (struct wsi_videoout_set){.size = size, .buffers = buffers,
+++#if defined(__PROSPERO__)
+++                                               .physical = physical,
+++#endif
+++   };
+++   out->set_count = index + 1;
++    int result = index == 0 ? sceVideoOutSetFlipRate(out->handle, videoout_flip_rate) : 0;
++    struct ps5_video_out_buffer registered[VIDEOOUT_BUFFERS];
++    for (uint32_t i = 0; i < VIDEOOUT_BUFFERS; i++)
++@@ -505,8 +532,7 @@
++    }
++    fprintf(stderr, "wsi/videoout: %ux%u framebuffers registered as set %u, buffers %u-%u\n", size->extent.width,
++            size->extent.height, index, index * VIDEOOUT_BUFFERS, index * VIDEOOUT_BUFFERS + VIDEOOUT_BUFFERS - 1);
++-   out->sets[index] = (struct wsi_videoout_set){.size = size, .buffers = buffers};
++-   out->set_count = index + 1;
+++   out->sets[index].registered = true;
++    *set_out = &out->sets[index];
++    return VK_SUCCESS;
++ }
++@@ -527,8 +553,10 @@
++    struct wsi_videoout_output *out = &videoout_output;
++    mtx_lock(&out->lock);
++    for (;;) {
++-      while (out->queue_count == 0)
+++      while (out->queue_count == 0 && !out->stop_thread)
++          cnd_wait(&out->changed, &out->lock);
+++      if (out->queue_count == 0 && out->stop_thread)
+++         break;
++       const struct wsi_videoout_present present = out->queue[out->queue_head];
++       mtx_unlock(&out->lock);
++ 
++@@ -553,6 +581,7 @@
++       chain->in_flight--;
++       cnd_broadcast(&out->changed);
++    }
+++   mtx_unlock(&out->lock);
++    return 0;
++ }
++ 
++@@ -1123,6 +1152,10 @@
++    }
++    wsi_swapchain_finish(&chain->base);
++    vk_free(pAllocator, chain);
+++   mtx_lock(&out->lock);
+++   assert(out->active_swapchains > 0);
+++   out->active_swapchains--;
+++   mtx_unlock(&out->lock);
++    return VK_SUCCESS;
++ }
++ 
++@@ -1200,6 +1233,7 @@
++    if (out->current)
++       out->current->retired = true;
++    out->current = chain;
+++   out->active_swapchains++;
++    mtx_unlock(&out->lock);
++ 
++    *swapchain_out = &chain->base;
++@@ -1243,3 +1277,79 @@
++ wsi_display_setup_syncobj_fd(struct wsi_device *wsi_device, int fd)
++ {
++ }
+++
+++/* RPCS3 Qt handoff. Call after destroying all swapchains AND the Vulkan
+++ * instance; external synchronization is required against Vulkan creation.
+++ * Never grant EGL ownership after a failed close or while images are live.
+++ * This is an application integration API, not a Vulkan extension. */
+++PUBLIC VkResult wsi_videoout_release_output(void);
+++PUBLIC VkResult
+++wsi_videoout_release_output(void)
+++{
+++   call_once(&videoout_once, videoout_output_init_once);
+++   struct wsi_videoout_output *out = &videoout_output;
+++   mtx_lock(&out->lock);
+++   if (out->active_swapchains || out->queue_count || out->releasing) {
+++      mtx_unlock(&out->lock);
+++      return VK_ERROR_NATIVE_WINDOW_IN_USE_KHR;
+++   }
+++   out->releasing = true;
+++   out->stop_thread = true;
+++   cnd_broadcast(&out->changed);
+++   const bool join = out->thread_started;
+++   const thrd_t thread = out->thread;
+++   mtx_unlock(&out->lock);
+++   if (join)
+++      thrd_join(thread, NULL);
+++   mtx_lock(&out->lock);
+++   out->thread_started = false;
+++   out->stop_thread = false;
+++   VkResult result = VK_SUCCESS;
+++   if (out->handle >= 0) {
+++      if (out->high_frame_rate)
+++         sceVideoOutConfigureOutput(out->handle, PS5_VIDEO_OUT_MODE_RESTORE, NULL, NULL, NULL);
+++      const int closed = sceVideoOutClose(out->handle);
+++      if (closed != 0) {
+++         fprintf(stderr, "wsi/videoout: display handoff close failed: 0x%08x\n", (unsigned)closed);
+++         result = VK_ERROR_INITIALIZATION_FAILED;
+++         goto done;
+++      }
+++      out->handle = -1;
+++   }
+++   out->opened = false;
+++   out->high_frame_rate = false;
+++   out->modes_settled = false;
+++   out->high_mode_offered = false;
+++   for (uint32_t i = 0; i < out->set_count; i++) {
+++      struct wsi_videoout_set *set = &out->sets[i];
+++      const size_t bytes = VIDEOOUT_BUFFERS * set->size->buffer_bytes;
+++      set->registered = false;
+++      if (set->buffers) {
+++         if (munmap(set->buffers, bytes) != 0) {
+++            result = VK_ERROR_MEMORY_MAP_FAILED;
+++            continue; /* Keep the physical allocation backing a live mapping. */
+++         }
+++         set->buffers = NULL;
+++      }
+++#if defined(__PROSPERO__)
+++      if (set->physical >= 0) {
+++         if (sceKernelReleaseDirectMemory(set->physical, bytes) != 0) {
+++            result = VK_ERROR_MEMORY_MAP_FAILED;
+++            continue;
+++         }
+++         set->physical = -1;
+++      }
+++#endif
+++   }
+++   if (result == VK_SUCCESS) {
+++      memset(out->sets, 0, sizeof(out->sets));
+++      out->set_count = 0;
+++      memset(out->buffer, 0, sizeof(out->buffer));
+++      out->flip_argument = 0;
+++      out->queue_head = 0;
+++   }
+++done:
+++   out->releasing = false;
+++   mtx_unlock(&out->lock);
+++   return result;
+++}
+--- /dev/null
++++ b/ps5/graphics/radv_recipe.py
+@@ -0,0 +1,52 @@
++"""Expose the pinned upstream RADV link recipe to CMake without rewriting it."""
++import argparse
++import fcntl
++import json
++import os
++import shlex
++import shutil
++import subprocess
++from pathlib import Path
++
++parser = argparse.ArgumentParser(description=__doc__)
++parser.add_argument('--driver-root', required=True, type=Path)
++parser.add_argument('--sdk', required=True, type=Path)
++parser.add_argument('--archive', required=True, type=Path)
++args = parser.parse_args()
++script = r'''set -euo pipefail
++source "$1/tools/radv-link.sh"
++radv_link_recipe "$1" "$2" "$3"
++printf '%s\0' "${#radv_linker_script[@]}" "${radv_linker_script[@]}"
++printf '%s\0' "${#radv_link_inputs[@]}" "${radv_link_inputs[@]}"
++printf '%s\0' "${#radv_link_flags[@]}" "${radv_link_flags[@]}"
++'''
++shared = args.driver_root / 'build'
++shared.mkdir(exist_ok=True)
++private_map = args.archive.parent / 'radv-platform-local.map'
++with (shared / 'rpcs3-radv-recipe.lock').open('a') as lock:
++    fcntl.flock(lock, fcntl.LOCK_EX)
++    result = subprocess.run(['bash', '-c', script, 'rpcs3-radv', str(args.driver_root),
++                             str(args.sdk), str(args.archive)], check=True, capture_output=True)
++    shutil.copyfile(shared / 'radv-platform-local.map', private_map)
++parts = result.stdout.decode().split('\0')
++groups = []
++for _ in range(3):
++    count = int(parts.pop(0))
++    groups.append(parts[:count])
++    del parts[:count]
++link_script, inputs, flags = groups
++flags = [str(private_map) if item == str(shared / 'radv-platform-local.map') else item for item in flags]
++libraries = []
++index = 0
++while index < len(inputs):
++    value = inputs[index]
++    if value == '-L':
++        index += 1
++        libraries.append('-L' + inputs[index])
++    elif value.startswith('--'):
++        libraries.append('-Wl,' + value)
++    else:
++        libraries.append(value)
++    index += 1
++print(json.dumps({'libraries': libraries,
++                  'options': ['LINKER:SHELL:' + shlex.join(link_script + flags)]}))
+--- /dev/null
++++ b/ps5/graphics/vulkan_runtime.cpp
+@@ -0,0 +1,28 @@
++#include "vulkan_runtime.h"
++#include <mutex>
++
++// Entry point exported by the pinned PS5 RADV static archive. This bypasses
++// desktop ICD discovery; no Windows DLL or Linux libvulkan is loaded.
++extern "C" VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL
++vk_icdGetInstanceProcAddr(VkInstance instance, const char* name);
++
++namespace rpcs3::ps5
++{
++    bool initialize_vulkan()
++    {
++        static std::once_flag once;
++        std::call_once(once, [] { volkInitializeCustom(vk_icdGetInstanceProcAddr); });
++        return vkCreateInstance && vkEnumerateInstanceExtensionProperties &&
++               vkEnumerateInstanceLayerProperties;
++    }
++
++    void load_vulkan_instance(VkInstance instance)
++    {
++        volkLoadInstance(instance);
++    }
++
++    void load_vulkan_device(VkDevice device)
++    {
++        volkLoadDevice(device);
++    }
++}
+--- /dev/null
++++ b/ps5/graphics/vulkan_runtime.h
+@@ -0,0 +1,11 @@
++#pragma once
++#include <volk.h>
++
++namespace rpcs3::ps5
++{
++    bool initialize_vulkan();
++    void load_vulkan_instance(VkInstance instance);
++    void load_vulkan_device(VkDevice device);
++    VkResult create_display_surface(VkInstance instance, VkPhysicalDevice gpu,
++                                    VkSurfaceKHR* surface);
++}
+--- /dev/null
++++ b/ps5/input/ps5_pad_handler.cpp
+@@ -0,0 +1,382 @@
++#include "stdafx.h"
++#include "ps5_pad_handler.h"
++#include "ps5/qt/qpa/pad_broker.h"
++#include "Emu/Io/pad_config.h"
++
++LOG_CHANNEL(ps5_pad_log, "PS5 Pad");
++
++ps5_pad_handler::ps5_pad_handler() : PadHandlerBase(pad_handler::scepad)
++{
++	button_list =
++	{
++		{ None,     ""         },
++		{ Cross,    "Cross"    },
++		{ Circle,   "Circle"   },
++		{ Square,   "Square"   },
++		{ Triangle, "Triangle" },
++		{ Left,     "Left"     },
++		{ Right,    "Right"    },
++		{ Up,       "Up"       },
++		{ Down,     "Down"     },
++		{ L1,       "L1"       },
++		{ R1,       "R1"       },
++		{ L3,       "L3"       },
++		{ R3,       "R3"       },
++		{ Options,  "Options"  },
++		{ Touchpad, "Touchpad" },
++		{ L2,       "L2"       },
++		{ R2,       "R2"       },
++		{ LSXNeg,   "LS X-"    },
++		{ LSXPos,   "LS X+"    },
++		{ LSYPos,   "LS Y+"    },
++		{ LSYNeg,   "LS Y-"    },
++		{ RSXNeg,   "RS X-"    },
++		{ RSXPos,   "RS X+"    },
++		{ RSYPos,   "RS Y+"    },
++		{ RSYNeg,   "RS Y-"    },
++	};
++
++	init_configs();
++
++	// The DualSense's sticks and triggers are 0..255, as DS4/DualSense over HID
++	thumb_max = 255;
++	trigger_min = 0;
++	trigger_max = 255;
++
++	b_has_config = true;
++	b_has_deadzones = true;
++	b_has_rumble = true;
++	b_has_led = true;
++	b_has_rgb = true;
++
++	m_trigger_threshold = trigger_max / 2;
++	m_thumb_threshold = thumb_max / 2;
++}
++
++ps5_pad_handler::~ps5_pad_handler()
++{
++	for (auto& [name, dev] : m_devices)
++	{
++		if (dev && dev->handle >= 0)
++		{
++			rpcs3_ps5_pad_release(dev->handle);
++			dev->handle = -1;
++		}
++	}
++}
++
++std::string ps5_pad_handler::device_name(u32 index)
++{
++	return fmt::format("DualSense %u", index + 1);
++}
++
++void ps5_pad_handler::init_config(cfg_pad* cfg)
++{
++	if (!cfg) return;
++
++	cfg->ls_left.def  = ::at32(button_list, LSXNeg);
++	cfg->ls_down.def  = ::at32(button_list, LSYNeg);
++	cfg->ls_right.def = ::at32(button_list, LSXPos);
++	cfg->ls_up.def    = ::at32(button_list, LSYPos);
++	cfg->rs_left.def  = ::at32(button_list, RSXNeg);
++	cfg->rs_down.def  = ::at32(button_list, RSYNeg);
++	cfg->rs_right.def = ::at32(button_list, RSXPos);
++	cfg->rs_up.def    = ::at32(button_list, RSYPos);
++	cfg->start.def    = ::at32(button_list, Options);
++	// The DualSense has no Select: the touchpad click stands in for it
++	cfg->select.def   = ::at32(button_list, Touchpad);
++	// The PS button belongs to the system: Options + touchpad opens RPCS3's home menu
++	cfg->ps.def       = cfg_pad::make_button_string(button_list, {{Options, Touchpad}});
++	cfg->square.def   = ::at32(button_list, Square);
++	cfg->cross.def    = ::at32(button_list, Cross);
++	cfg->circle.def   = ::at32(button_list, Circle);
++	cfg->triangle.def = ::at32(button_list, Triangle);
++	cfg->left.def     = ::at32(button_list, Left);
++	cfg->down.def     = ::at32(button_list, Down);
++	cfg->right.def    = ::at32(button_list, Right);
++	cfg->up.def       = ::at32(button_list, Up);
++	cfg->r1.def       = ::at32(button_list, R1);
++	cfg->r2.def       = ::at32(button_list, R2);
++	cfg->r3.def       = ::at32(button_list, R3);
++	cfg->l1.def       = ::at32(button_list, L1);
++	cfg->l2.def       = ::at32(button_list, L2);
++	cfg->l3.def       = ::at32(button_list, L3);
++
++	cfg->pressure_intensity_button.def = ::at32(button_list, None);
++	cfg->analog_limiter_button.def = ::at32(button_list, None);
++	cfg->orientation_reset_button.def = ::at32(button_list, None);
++
++	cfg->lstick_anti_deadzone.def = static_cast<u32>(0.13 * thumb_max); // 13%
++	cfg->rstick_anti_deadzone.def = static_cast<u32>(0.13 * thumb_max); // 13%
++	cfg->lstickdeadzone.def    = 40; // between 0 and 255
++	cfg->rstickdeadzone.def    = 40; // between 0 and 255
++	cfg->ltriggerthreshold.def = 0;  // between 0 and 255
++	cfg->rtriggerthreshold.def = 0;  // between 0 and 255
++
++	cfg->colorR.def = 0;
++	cfg->colorG.def = 0;
++	cfg->colorB.def = 20;
++
++	cfg->from_default();
++}
++
++bool ps5_pad_handler::Init()
++{
++	if (m_is_init)
++		return true;
++
++	if (const int res = rpcs3_ps5_pad_initialize(); res < 0)
++	{
++		ps5_pad_log.error("rpcs3_ps5_pad_initialize() failed: 0x%x", res);
++		return false;
++	}
++
++	for (u32 i = 0; i < 4; i++)
++	{
++		auto dev = std::make_shared<ps5_pad_device>();
++		m_devices.emplace(device_name(i), dev);
++	}
++
++	m_is_init = true;
++	scan_users();
++	return true;
++}
++
++// Player N is the Nth signed-in user. Users come and go; check about once a second.
++void ps5_pad_handler::scan_users()
++{
++	m_last_scan = steady_clock::now();
++
++	sce_user_list list{{-1, -1, -1, -1}};
++	if (sceUserServiceGetLoginUserIdList(&list) < 0)
++	{
++		s32 initial = -1;
++		if (sceUserServiceGetInitialUser(&initial) < 0)
++			return;
++		list.user_id[0] = initial;
++	}
++
++	for (u32 i = 0; i < 4; i++)
++	{
++		auto& dev = ::at32(m_devices, device_name(i));
++		const s32 user = list.user_id[i];
++
++		if (dev->user == user && dev->handle >= 0)
++			continue;
++
++		if (dev->handle >= 0)
++		{
++			ps5_pad_log.notice("Player %u: user %d signed out", i + 1, dev->user);
++			rpcs3_ps5_pad_release(dev->handle);
++			dev->handle = -1;
++			dev->connected = false;
++		}
++
++		dev->user = user;
++
++		if (user < 0)
++			continue;
++
++		const s32 handle = rpcs3_ps5_pad_acquire(user);
++
++		if (handle < 0)
++		{
++			ps5_pad_log.error("Player %u: scePadOpen(user=%d) failed: 0x%x", i + 1, user, handle);
++			continue;
++		}
++
++		dev->handle = handle;
++		scePadSetVibrationMode(handle, ps5::PAD_VIBRATION_COMPATIBLE);
++		ps5_pad_log.notice("Player %u: user %d, pad handle %d", i + 1, user, handle);
++	}
++}
++
++void ps5_pad_handler::process()
++{
++	if (!m_is_init)
++		return;
++
++	if (steady_clock::now() - m_last_scan > std::chrono::seconds(1))
++	{
++		scan_users();
++	}
++
++	PadHandlerBase::process();
++}
++
++std::vector<pad_list_entry> ps5_pad_handler::list_devices()
++{
++	std::vector<pad_list_entry> pads;
++
++	if (!Init())
++		return pads;
++
++	for (const auto& [name, dev] : m_devices)
++	{
++		pads.emplace_back(name, false);
++	}
++
++	return pads;
++}
++
++std::shared_ptr<PadDevice> ps5_pad_handler::get_device(const std::string& device)
++{
++	if (!Init())
++		return nullptr;
++
++	if (auto it = m_devices.find(device); it != m_devices.end())
++		return it->second;
++
++	return nullptr;
++}
++
++PadHandlerBase::connection ps5_pad_handler::update_connection(const std::shared_ptr<PadDevice>& device)
++{
++	auto* dev = static_cast<ps5_pad_device*>(device.get());
++	if (!dev || dev->handle < 0)
++		return connection::disconnected;
++
++	// Drain the samples since the last read; the newest one counts
++	ps5::pad_sample samples[16];
++	const int count = scePadRead(dev->handle, samples, 16);
++
++	if (count < 0)
++	{
++		dev->connected = false;
++		return connection::disconnected;
++	}
++
++	if (count == 0)
++		return dev->connected ? connection::no_data : connection::disconnected;
++
++	const ps5::pad_sample& s = samples[count - 1];
++	dev->connected = s.connected != 0;
++
++	if (!dev->connected)
++		return connection::disconnected;
++
++	if (s.buttons & ps5::PAD_INTERCEPTED)
++	{
++		// The system menu has the pad: report nothing pressed
++		dev->last = {};
++		dev->last.left_x = dev->last.left_y = dev->last.right_x = dev->last.right_y = 128;
++		return connection::connected;
++	}
++
++	dev->last = s;
++	return connection::connected;
++}
++
++std::unordered_map<u32, u16> ps5_pad_handler::get_button_values(const std::shared_ptr<PadDevice>& device)
++{
++	std::unordered_map<u32, u16> values;
++	const auto* dev = static_cast<ps5_pad_device*>(device.get());
++	if (!dev)
++		return values;
++
++	const ps5::pad_sample& s = dev->last;
++	const auto bit = [&](u32 mask) -> u16 { return (s.buttons & mask) ? 255 : 0; };
++
++	values[Cross]    = bit(ps5::PAD_CROSS);
++	values[Circle]   = bit(ps5::PAD_CIRCLE);
++	values[Square]   = bit(ps5::PAD_SQUARE);
++	values[Triangle] = bit(ps5::PAD_TRIANGLE);
++	values[Left]     = bit(ps5::PAD_LEFT);
++	values[Right]    = bit(ps5::PAD_RIGHT);
++	values[Up]       = bit(ps5::PAD_UP);
++	values[Down]     = bit(ps5::PAD_DOWN);
++	values[L1]       = bit(ps5::PAD_L1);
++	values[R1]       = bit(ps5::PAD_R1);
++	values[L3]       = bit(ps5::PAD_L3);
++	values[R3]       = bit(ps5::PAD_R3);
++	values[Options]  = bit(ps5::PAD_OPTIONS);
++	values[Touchpad] = bit(ps5::PAD_TOUCH_PAD);
++	values[L2]       = s.l2;
++	values[R2]       = s.r2;
++
++	// Sticks: 0 = left/up, 255 = right/down (DS4 conventions)
++	values[LSXNeg] = Clamp0To255((127.5f - s.left_x) * 2.0f);
++	values[LSXPos] = Clamp0To255((s.left_x - 127.5f) * 2.0f);
++	values[LSYNeg] = Clamp0To255((s.left_y - 127.5f) * 2.0f);
++	values[LSYPos] = Clamp0To255((127.5f - s.left_y) * 2.0f);
++	values[RSXNeg] = Clamp0To255((127.5f - s.right_x) * 2.0f);
++	values[RSXPos] = Clamp0To255((s.right_x - 127.5f) * 2.0f);
++	values[RSYNeg] = Clamp0To255((s.right_y - 127.5f) * 2.0f);
++	values[RSYPos] = Clamp0To255((127.5f - s.right_y) * 2.0f);
++
++	return values;
++}
++
++pad_preview_values ps5_pad_handler::get_preview_values(const std::unordered_map<u32, u16>& data, const std::vector<std::string>& /*buttons*/)
++{
++	return {
++		::at32(data, L2),
++		::at32(data, R2),
++		::at32(data, LSXPos) - ::at32(data, LSXNeg),
++		::at32(data, LSYPos) - ::at32(data, LSYNeg),
++		::at32(data, RSXPos) - ::at32(data, RSXNeg),
++		::at32(data, RSYPos) - ::at32(data, RSYNeg)
++	};
++}
++
++bool ps5_pad_handler::get_is_left_trigger(const std::shared_ptr<PadDevice>& /*device*/, u32 keyCode)
++{
++	return keyCode == L2;
++}
++
++bool ps5_pad_handler::get_is_right_trigger(const std::shared_ptr<PadDevice>& /*device*/, u32 keyCode)
++{
++	return keyCode == R2;
++}
++
++bool ps5_pad_handler::get_is_left_stick(const std::shared_ptr<PadDevice>& /*device*/, u32 keyCode)
++{
++	return keyCode >= LSXNeg && keyCode <= LSYPos;
++}
++
++bool ps5_pad_handler::get_is_right_stick(const std::shared_ptr<PadDevice>& /*device*/, u32 keyCode)
++{
++	return keyCode >= RSXNeg && keyCode <= RSYPos;
++}
++
++void ps5_pad_handler::SetPadData(const std::string& padId, u8 /*player_id*/, u8 large_motor, u8 small_motor, s32 r, s32 g, s32 b, bool /*player_led*/, bool /*battery_led*/, u32 /*battery_led_brightness*/)
++{
++	auto it = m_devices.find(padId);
++	if (it == m_devices.end() || it->second->handle < 0)
++		return;
++
++	const u8 motors[2] = { large_motor, small_motor };
++	scePadSetVibration(it->second->handle, motors);
++
++	if (r >= 0 && g >= 0 && b >= 0)
++	{
++		const u8 color[4] = { static_cast<u8>(r), static_cast<u8>(g), static_cast<u8>(b), 0 };
++		scePadSetLightBar(it->second->handle, color);
++	}
++}
++
++void ps5_pad_handler::apply_pad_data(const pad_ensemble& binding)
++{
++	const auto& pad = binding.pad;
++	auto* dev = static_cast<ps5_pad_device*>(binding.device.get());
++
++	if (!dev || !pad || dev->handle < 0)
++		return;
++
++	cfg_pad* config = dev->config;
++	if (!config)
++		return;
++
++	// Rumble, as the generic handlers compute it
++	const u8 speed_large = config->get_large_motor_speed(pad->m_vibrate_motors);
++	const u8 speed_small = config->get_small_motor_speed(pad->m_vibrate_motors);
++
++	if (speed_large != dev->large_motor || speed_small != dev->small_motor)
++	{
++		dev->large_motor = speed_large;
++		dev->small_motor = speed_small;
++
++		const u8 motors[2] = { speed_large, speed_small };
++		scePadSetVibration(dev->handle, motors);
++	}
++}
+--- /dev/null
++++ b/ps5/input/ps5_pad_handler.h
+@@ -0,0 +1,62 @@
++#pragma once
++
++#include "Emu/Io/PadHandler.h"
++#include "ps5_sce.h"
++
++#include <map>
++
++// A DualSense through ScePad, one per signed-in user (players 1-4)
++class ps5_pad_device : public PadDevice
++{
++public:
++	s32 user = -1;
++	s32 handle = -1;
++	bool connected = false;
++	ps5::pad_sample last{};
++	u8 large_motor = 0;
++	u8 small_motor = 0;
++};
++
++class ps5_pad_handler final : public PadHandlerBase
++{
++	enum key_codes : u32
++	{
++		None = 0,
++		Cross, Circle, Square, Triangle,
++		Left, Right, Up, Down,
++		L1, R1, L3, R3,
++		Options, Touchpad,
++		L2, R2,
++		LSXNeg, LSXPos, LSYNeg, LSYPos,
++		RSXNeg, RSXPos, RSYNeg, RSYPos,
++	};
++
++public:
++	ps5_pad_handler();
++	~ps5_pad_handler() override;
++
++	bool Init() override;
++	void process() override;
++	void init_config(cfg_pad* cfg) override;
++	std::vector<pad_list_entry> list_devices() override;
++	void SetPadData(const std::string& padId, u8 player_id, u8 large_motor, u8 small_motor, s32 r, s32 g, s32 b, bool player_led, bool battery_led, u32 battery_led_brightness) override;
++
++	// "DualSense 1".."DualSense 4": player N is the Nth signed-in user's controller
++	static std::string device_name(u32 index);
++
++private:
++	std::map<std::string, std::shared_ptr<ps5_pad_device>> m_devices;
++	steady_clock::time_point m_last_scan{};
++
++	void scan_users();
++
++	std::shared_ptr<PadDevice> get_device(const std::string& device) override;
++	PadHandlerBase::connection update_connection(const std::shared_ptr<PadDevice>& device) override;
++	void apply_pad_data(const pad_ensemble& binding) override;
++	bool get_is_left_trigger(const std::shared_ptr<PadDevice>& device, u32 keyCode) override;
++	bool get_is_right_trigger(const std::shared_ptr<PadDevice>& device, u32 keyCode) override;
++	bool get_is_left_stick(const std::shared_ptr<PadDevice>& device, u32 keyCode) override;
++	bool get_is_right_stick(const std::shared_ptr<PadDevice>& device, u32 keyCode) override;
++	std::unordered_map<u32, u16> get_button_values(const std::shared_ptr<PadDevice>& device) override;
++	pad_preview_values get_preview_values(const std::unordered_map<u32, u16>& data, const std::vector<std::string>& buttons) override;
++};
+--- /dev/null
++++ b/ps5/input/ps5_sce.h
+@@ -0,0 +1,85 @@
++#pragma once
++
++// Console services the PS5 frontend calls. No SDK header declares them; the
++// signatures and the pad sample layout are the ones PS5_VulkanTemplate
++// (ps5/src/platform.c) runs on the console.
++
++#include <cstddef>
++#include <cstdint>
++
++extern "C"
++{
++	int sceSystemServiceHideSplashScreen(void);
++	int sceSystemServiceLoadExec(const char* path, const char* const* argv);
++	int sceUserServiceInitialize(const void* params);
++	int sceUserServiceGetInitialUser(int32_t* user_id);
++
++	struct sce_user_list
++	{
++		int32_t user_id[4]; // unused entries are -1
++	};
++	int sceUserServiceGetLoginUserIdList(sce_user_list* list);
++
++	int scePadInit(void);
++	int scePadOpen(int32_t user_id, int32_t port_type, int32_t index, const void* params);
++	int scePadGetHandle(int32_t user_id, int32_t port_type, int32_t index);
++	int scePadRead(int32_t handle, void* samples, int32_t capacity);
++	int scePadClose(int32_t handle);
++	int scePadSetVibrationMode(int32_t handle, int32_t mode);
++	int scePadSetVibration(int32_t handle, const void* vibration);
++	int scePadSetLightBar(int32_t handle, const void* color);
++
++	int sceAudioOutInit(void);
++	int sceAudioOutOpen(int32_t user, int32_t type, int32_t index, uint32_t grain, uint32_t rate, uint32_t format);
++	int sceAudioOutOutput(int32_t port, const void* samples);
++	int sceAudioOutClose(int32_t port);
++
++	int sceKernelUsleep(uint32_t microseconds);
++}
++
++namespace ps5
++{
++	// One pad sample as the console writes it (120 bytes)
++	struct pad_sample
++	{
++		uint32_t buttons;
++		uint8_t left_x, left_y, right_x, right_y, l2, r2;
++		uint8_t reserved[66];
++		int32_t connected;
++		uint64_t timestamp_us;
++		uint8_t extension[16];
++		uint8_t connected_count;
++		uint8_t remaining[15];
++	};
++	static_assert(sizeof(pad_sample) == 120);
++	static_assert(offsetof(pad_sample, connected) == 0x4c);
++
++	enum pad_button : uint32_t
++	{
++		PAD_L3 = 0x000002,
++		PAD_R3 = 0x000004,
++		PAD_OPTIONS = 0x000008,
++		PAD_UP = 0x000010,
++		PAD_RIGHT = 0x000020,
++		PAD_DOWN = 0x000040,
++		PAD_LEFT = 0x000080,
++		PAD_L2 = 0x000100,
++		PAD_R2 = 0x000200,
++		PAD_L1 = 0x000400,
++		PAD_R1 = 0x000800,
++		PAD_TRIANGLE = 0x001000,
++		PAD_CIRCLE = 0x002000,
++		PAD_CROSS = 0x004000,
++		PAD_SQUARE = 0x008000,
++		PAD_TOUCH_PAD = 0x100000,
++		PAD_INTERCEPTED = 0x80000000u, // the system has the pad (PS button menu)
++	};
++
++	// Two-motor rumble (the other mode is the DualSense's haptics)
++	constexpr int32_t PAD_VIBRATION_COMPATIBLE = 2;
++
++	// sceAudioOutOpen
++	constexpr int32_t AUDIO_OUT_USER_SYSTEM = 0xff;
++	constexpr uint32_t AUDIO_OUT_S16_STEREO = 1;
++	constexpr uint32_t AUDIO_OUT_FLOAT_STEREO = 4;
++}
+--- /dev/null
++++ b/ps5/llvm/LLVMInterop.cmake
+@@ -0,0 +1,30 @@
++include_guard(GLOBAL)
++if(NOT PS5 OR NOT STATIC_LINK_LLVM OR NOT TARGET LLVMSupport)
++    message(FATAL_ERROR "PS5 process symbol resolution requires native static LLVMSupport")
++endif()
++get_target_property(_llvm_support_source LLVMSupport IMPORTED_LOCATION_RELEASE)
++if(NOT _llvm_support_source)
++    get_target_property(_llvm_support_source LLVMSupport IMPORTED_LOCATION)
++endif()
++if(NOT EXISTS "${_llvm_support_source}")
++    message(FATAL_ERROR "Build native LLVMSupport before configuring the application")
++endif()
++set(_llvm_support_private "${CMAKE_BINARY_DIR}/ps5-llvm-private/libLLVMSupport.a")
++set(_llvm_support_command "${RPCS3_PS5_HOST_PYTHON}" "${CMAKE_CURRENT_LIST_DIR}/prepare_llvm_support.py"
++    --archive "${_llvm_support_source}" --output "${_llvm_support_private}"
++    --nm "${PS5_PAYLOAD_SDK}/bin/llvm-nm" --objcopy "${PS5_PAYLOAD_SDK}/bin/llvm-objcopy")
++execute_process(COMMAND ${_llvm_support_command} RESULT_VARIABLE _llvm_interop_status
++    OUTPUT_VARIABLE _llvm_interop_output ERROR_VARIABLE _llvm_interop_error)
++if(NOT _llvm_interop_status EQUAL 0)
++    message(FATAL_ERROR "Native LLVM process-loader adaptation failed: ${_llvm_interop_error}")
++endif()
++add_custom_command(OUTPUT "${_llvm_support_private}"
++    COMMAND ${_llvm_support_command}
++    DEPENDS "${_llvm_support_source}" "${CMAKE_CURRENT_LIST_DIR}/prepare_llvm_support.py"
++    VERBATIM)
++add_custom_target(rpcs3_ps5_llvm_loader_map DEPENDS "${_llvm_support_private}")
++add_dependencies(LLVMSupport rpcs3_ps5_llvm_loader_map)
++set_property(TARGET LLVMSupport PROPERTY IMPORTED_LOCATION_RELEASE "${_llvm_support_private}")
++set_property(TARGET LLVMSupport PROPERTY IMPORTED_LOCATION "${_llvm_support_private}")
++add_library(rpcs3_ps5_llvm_process STATIC "${CMAKE_CURRENT_LIST_DIR}/llvm_process_symbols.cpp")
++target_compile_features(rpcs3_ps5_llvm_process PRIVATE cxx_std_17)
+--- /dev/null
++++ b/ps5/llvm/llvm_process_symbols.cpp
+@@ -0,0 +1,154 @@
++// Adapted from lavavex/rpcs3 5e0e0e613d218e2450b8b3c8adab4576286ca92c.
++// This table serves the private LLVM archive only.
++// dlopen/dlsym for LLVM's JIT in a PS5 title.
++//
++// A title cannot dlopen itself: dlopen(NULL) fails and dlerror() answers a pointer the
++// title cannot read (LLVM's DynamicLibrary::getPermanentLibrary copied it and faulted).
++// RPCS3's JIT links its code against the process through DynamicLibrary: here the process
++// handle answers from a table of what JIT-compiled code calls (libc, libm, compiler-rt).
++
++#include <cmath>
++#include <cstdint>
++#include <cstdlib>
++#include <cstring>
++#include <string_view>
++
++extern "C"
++{
++	// compiler-rt builtins LLVM lowers 128-bit and half-float operations to
++	__int128 __divti3(__int128, __int128);
++	__int128 __modti3(__int128, __int128);
++	unsigned __int128 __udivti3(unsigned __int128, unsigned __int128);
++	unsigned __int128 __umodti3(unsigned __int128, unsigned __int128);
++	__int128 __multi3(__int128, __int128);
++	float __extendhfsf2(uint16_t);
++	uint16_t __truncsfhf2(float);
++	uint16_t __truncdfhf2(double);
++	double __floattidf(__int128);
++	double __floatuntidf(unsigned __int128);
++	__int128 __fixdfti(double);
++	unsigned __int128 __fixunsdfti(double);
++	float __floattisf(__int128);
++	float __floatuntisf(unsigned __int128);
++	__int128 __fixsfti(float);
++	unsigned __int128 __fixunssfti(float);
++}
++
++namespace
++{
++	struct symbol
++	{
++		const char* name;
++		void* address;
++	};
++
++#define SYM(x) { #x, reinterpret_cast<void*>(&x) }
++#define SYM_AS(name, fn) { name, reinterpret_cast<void*>(fn) }
++
++	const symbol s_symbols[] =
++	{
++		SYM(memcpy), SYM(memmove), SYM(memset), SYM(memcmp), SYM(strlen),
++		SYM(malloc), SYM(free), SYM(abort),
++		SYM_AS("fmod", static_cast<double(*)(double, double)>(&::fmod)),
++		SYM_AS("fmodf", static_cast<float(*)(float, float)>(&::fmodf)),
++		SYM_AS("sin", static_cast<double(*)(double)>(&::sin)),
++		SYM_AS("sinf", static_cast<float(*)(float)>(&::sinf)),
++		SYM_AS("cos", static_cast<double(*)(double)>(&::cos)),
++		SYM_AS("cosf", static_cast<float(*)(float)>(&::cosf)),
++		SYM_AS("tan", static_cast<double(*)(double)>(&::tan)),
++		SYM_AS("tanf", static_cast<float(*)(float)>(&::tanf)),
++		SYM_AS("exp", static_cast<double(*)(double)>(&::exp)),
++		SYM_AS("expf", static_cast<float(*)(float)>(&::expf)),
++		SYM_AS("exp2", static_cast<double(*)(double)>(&::exp2)),
++		SYM_AS("exp2f", static_cast<float(*)(float)>(&::exp2f)),
++		SYM_AS("log", static_cast<double(*)(double)>(&::log)),
++		SYM_AS("logf", static_cast<float(*)(float)>(&::logf)),
++		SYM_AS("log2", static_cast<double(*)(double)>(&::log2)),
++		SYM_AS("log2f", static_cast<float(*)(float)>(&::log2f)),
++		SYM_AS("log10", static_cast<double(*)(double)>(&::log10)),
++		SYM_AS("log10f", static_cast<float(*)(float)>(&::log10f)),
++		SYM_AS("pow", static_cast<double(*)(double, double)>(&::pow)),
++		SYM_AS("powf", static_cast<float(*)(float, float)>(&::powf)),
++		SYM_AS("sqrt", static_cast<double(*)(double)>(&::sqrt)),
++		SYM_AS("sqrtf", static_cast<float(*)(float)>(&::sqrtf)),
++		SYM_AS("floor", static_cast<double(*)(double)>(&::floor)),
++		SYM_AS("floorf", static_cast<float(*)(float)>(&::floorf)),
++		SYM_AS("ceil", static_cast<double(*)(double)>(&::ceil)),
++		SYM_AS("ceilf", static_cast<float(*)(float)>(&::ceilf)),
++		SYM_AS("trunc", static_cast<double(*)(double)>(&::trunc)),
++		SYM_AS("truncf", static_cast<float(*)(float)>(&::truncf)),
++		SYM_AS("round", static_cast<double(*)(double)>(&::round)),
++		SYM_AS("roundf", static_cast<float(*)(float)>(&::roundf)),
++		SYM_AS("rint", static_cast<double(*)(double)>(&::rint)),
++		SYM_AS("rintf", static_cast<float(*)(float)>(&::rintf)),
++		SYM_AS("nearbyint", static_cast<double(*)(double)>(&::nearbyint)),
++		SYM_AS("nearbyintf", static_cast<float(*)(float)>(&::nearbyintf)),
++		SYM_AS("fma", static_cast<double(*)(double, double, double)>(&::fma)),
++		SYM_AS("fmaf", static_cast<float(*)(float, float, float)>(&::fmaf)),
++		SYM_AS("fmin", static_cast<double(*)(double, double)>(&::fmin)),
++		SYM_AS("fminf", static_cast<float(*)(float, float)>(&::fminf)),
++		SYM_AS("fmax", static_cast<double(*)(double, double)>(&::fmax)),
++		SYM_AS("fmaxf", static_cast<float(*)(float, float)>(&::fmaxf)),
++		SYM_AS("ldexp", static_cast<double(*)(double, int)>(&::ldexp)),
++		SYM_AS("ldexpf", static_cast<float(*)(float, int)>(&::ldexpf)),
++		SYM(__divti3), SYM(__modti3), SYM(__udivti3), SYM(__umodti3), SYM(__multi3),
++		SYM(__extendhfsf2), SYM(__truncsfhf2), SYM(__truncdfhf2),
++		SYM(__floattidf), SYM(__floatuntidf), SYM(__fixdfti), SYM(__fixunsdfti),
++		SYM(__floattisf), SYM(__floatuntisf), SYM(__fixsfti), SYM(__fixunssfti),
++	};
++
++#undef SYM
++#undef SYM_AS
++
++	// Any non-null value: the process, as dlopen(NULL) names it
++	char s_process_handle;
++
++	thread_local const char* s_error = nullptr;
++}
++
++extern "C"
++{
++	void* rpcs3_ps5_llvm_dlopen(const char* path, int /*mode*/)
++	{
++		if (!path)
++		{
++			s_error = nullptr;
++			return &s_process_handle;
++		}
++
++		s_error = "dlopen: a PS5 title cannot load libraries";
++		return nullptr;
++	}
++
++	void* rpcs3_ps5_llvm_dlsym(void* handle, const char* name)
++	{
++		if (handle == &s_process_handle || handle == nullptr || handle == reinterpret_cast<void*>(-2) /* RTLD_DEFAULT */)
++		{
++			const std::string_view wanted(name ? name : "");
++
++			for (const symbol& s : s_symbols)
++			{
++				if (wanted == s.name)
++				{
++					s_error = nullptr;
++					return s.address;
++				}
++			}
++		}
++
++		s_error = "dlsym: symbol not found";
++		return nullptr;
++	}
++
++	char* rpcs3_ps5_llvm_dlerror(void)
++	{
++		const char* error = s_error;
++		s_error = nullptr;
++		return const_cast<char*>(error);
++	}
++
++	int rpcs3_ps5_llvm_dlclose(void* /*handle*/)
++	{
++		return 0;
++	}
++}
+--- /dev/null
++++ b/ps5/llvm/prepare_llvm_support.py
+@@ -0,0 +1,55 @@
++"""Adapt LLVM's four process-loader references in a private archive copy."""
++import argparse
++import hashlib
++import json
++import subprocess
++from pathlib import Path
++
++parser = argparse.ArgumentParser(description=__doc__)
++parser.add_argument('--archive', type=Path, required=True)
++parser.add_argument('--output', type=Path, required=True)
++parser.add_argument('--nm', required=True)
++parser.add_argument('--objcopy', required=True)
++args = parser.parse_args()
++archive = args.archive.resolve(strict=True)
++output = args.output.resolve()
++if output == archive or output.parent == archive.parent:
++    parser.error('Use a private output directory outside the LLVM build/install library directory')
++def digest(path):
++    with path.open('rb') as stream: return hashlib.file_digest(stream, 'sha256').hexdigest()
++def symbols(path, flag):
++    result = subprocess.run([args.nm, '--extern-only', flag, str(path)],
++                            capture_output=True, text=True, check=True)
++    return {parts[-1] for line in result.stdout.splitlines()
++            if len(parts := line.split()) >= 2 and len(parts[-2]) == 1 and parts[-2].isalpha()}
++names = ['dlopen', 'dlsym', 'dlerror', 'dlclose']
++mapping = {name: 'rpcs3_ps5_llvm_' + name for name in names}
++inputs = {'archive': str(archive), 'archive_sha256': digest(archive),
++          'adapter_sha256': digest(Path(__file__)), 'renames': mapping}
++manifest = output.with_suffix('.interop.json')
++if manifest.exists() and output.exists():
++    cached = json.loads(manifest.read_text())
++    if cached.get('inputs') == inputs and cached.get('output_sha256') == digest(output):
++        print(json.dumps({'archive': str(output), 'cached': True, 'references_renamed': 4}))
++        raise SystemExit(0)
++undefined = symbols(archive, '--undefined-only')
++defined = symbols(archive, '--defined-only')
++if not set(names).issubset(undefined) or set(names) & defined or set(mapping.values()) & (undefined | defined):
++    raise RuntimeError('Review pinned LLVM loader references before adapting this archive')
++output.parent.mkdir(parents=True, exist_ok=True)
++map_file = output.with_suffix('.symbols.map')
++map_file.write_text(''.join(name + ' ' + replacement + '\n' for name, replacement in mapping.items()))
++temporary = output.with_suffix('.tmp')
++subprocess.run([args.objcopy, '--redefine-syms=' + str(map_file), str(archive), str(temporary)],
++                check=True, capture_output=True)
++after_undefined = symbols(temporary, '--undefined-only')
++if set(names) & after_undefined or not set(mapping.values()).issubset(after_undefined):
++    raise RuntimeError('LLVM loader reference rewrite failed')
++if defined != symbols(temporary, '--defined-only'):
++    raise RuntimeError('An LLVM definition changed while adapting process-loader references')
++temporary.replace(output)
++report = {'inputs': inputs, 'output_sha256': digest(output),
++          'definitions_preserved': True, 'references_renamed': 4,
++          'global_application_dl_functions_overridden': False, 'device_tested': False}
++manifest.write_text(json.dumps(report, indent=2) + '\n')
++print(json.dumps({'archive': str(output), 'cached': False, 'references_renamed': 4}))
+--- /dev/null
++++ b/ps5/preflight.cmake
+@@ -0,0 +1,23 @@
++# Native target dependencies are mandatory: keep the original Qt frontend.
++# This check is included immediately after upstream's project() declaration.
++if(NOT CMAKE_CROSSCOMPILING OR NOT PS5)
++    message(FATAL_ERROR "The PS5 port requires the PS5 SDK cross toolchain")
++endif()
++if(CMAKE_CXX_COMPILER_ID STREQUAL "Clang" AND CMAKE_CXX_COMPILER_VERSION VERSION_LESS 19)
++    message(FATAL_ERROR "This upstream RPCS3 revision requires Clang >= 19; do not remove that requirement")
++endif()
++add_compile_definitions(RPCS3_PS5=1 VK_NO_PROTOTYPES=1)
++include("${CMAKE_CURRENT_LIST_DIR}/graphics/PS5Graphics.cmake")
++include("${CMAKE_CURRENT_LIST_DIR}/qt/QtPlatform.cmake")
++
++find_package(Qt6 6.7.0 CONFIG QUIET COMPONENTS
++    Core Gui Widgets Concurrent Multimedia MultimediaWidgets Svg SvgWidgets)
++if(NOT Qt6_FOUND)
++    message(FATAL_ERROR
++        "Missing PS5-target Qt >= 6.7 with the original RPCS3 GUI modules. "
++        "Ubuntu/Windows Qt libraries cannot be linked into a PS5 application. "
++        "Cross-build Qt and a PS5 QPA display/input plugin, then set PS5_DEPS_PREFIX. "
++        "No headless or replacement frontend is substituted.")
++endif()
++
++find_package(RPCS3PS5QtPlatform CONFIG REQUIRED)
+--- /dev/null
++++ b/ps5/qt/NativeApp.cmake
+@@ -0,0 +1,63 @@
++include_guard(GLOBAL)
++set(_RPCS3_PS5_NATIVE_APP_DIR "${CMAKE_CURRENT_LIST_DIR}")
++function(rpcs3_ps5_native_application target)
++    if(NOT PS5 OR NOT TARGET ${target})
++        message(FATAL_ERROR "A PS5 executable target is required")
++    endif()
++    set(_native "${RPCS3_PS5_VULKAN_ROOT}/tooling/native")
++    foreach(_file app_crt.cpp app-symbols.map)
++        if(NOT EXISTS "${_native}/${_file}")
++            message(FATAL_ERROR "Missing pinned native application startup: ${_file}")
++        endif()
++    endforeach()
++    target_sources(${target} PRIVATE "${_native}/app_crt.cpp")
++    target_sources(${target} PRIVATE "${_RPCS3_PS5_NATIVE_APP_DIR}/native_posix.c")
++    target_sources(${target} PRIVATE "${_RPCS3_PS5_NATIVE_APP_DIR}/native_filesystem.c")
++    set_source_files_properties("${_native}/app_crt.cpp"
++        "${_RPCS3_PS5_NATIVE_APP_DIR}/native_posix.c"
++        "${_RPCS3_PS5_NATIVE_APP_DIR}/native_filesystem.c" PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
++    foreach(_name mkstemp isatty link symlink readlink pathconf if_nametoindex gai_strerror getnameinfo wcsdup)
++        target_link_options(${target} PRIVATE "LINKER:--defsym=${_name}=rpcs3_ps5_${_name}")
++    endforeach()
++    # RADV's upstream recipe aliases statvfs to the SDK's synthetic counter
++    # provider. Redirect that provider symbol to our actual _fstatfs adapter.
++    target_link_options(${target} PRIVATE
++        "LINKER:--defsym=ps5_statvfs=rpcs3_ps5_statvfs"
++        "LINKER:--defsym=ps5_fstatvfs=rpcs3_ps5_fstatvfs")
++    foreach(_name cxa threads shm)
++        set(_object "${RPCS3_PS5_RUNTIME_EXTENSION_ROOT}/objects/${_name}.o")
++        if(NOT EXISTS "${_object}")
++            message(FATAL_ERROR "Native applications require the reviewed memory/TLS extension: ${_object}")
++        endif()
++        target_sources(${target} PRIVATE "${_object}")
++    endforeach()
++    target_include_directories(${target} PRIVATE "${RPCS3_PS5_RUNTIME_EXTENSION_ROOT}/include")
++    if(TARGET Qt6::Multimedia)
++        # Qt 6.8's static FFmpeg plugin intentionally leaves the FFmpeg
++        # libraries to its consumer. Supply the same native build as RPCS3.
++        if(NOT RPCS3_PS5_FFMPEG_ROOT)
++            message(FATAL_ERROR "Set RPCS3_PS5_FFMPEG_ROOT to the native static FFmpeg prefix")
++        endif()
++        foreach(_name avformat avcodec swresample swscale avutil)
++            set(_archive "${RPCS3_PS5_FFMPEG_ROOT}/lib/lib${_name}.a")
++            if(NOT EXISTS "${_archive}")
++                message(FATAL_ERROR "Missing native FFmpeg archive: ${_archive}")
++            endif()
++            target_link_libraries(${target} PRIVATE "${_archive}")
++        endforeach()
++    endif()
++    # Use application process parameters and constructor arrays, rather than
++    # the payload SDK's loader-specific crt1. Keep the real full libc++ ABI.
++    target_link_options(${target} PRIVATE -nostartfiles -nodefaultlibs
++        "LINKER:--build-id=none" "LINKER:-z,nodynamic-undefined-weak"
++        "LINKER:--eh-frame-hdr" "LINKER:-e,_start"
++        "LINKER:--version-script,${_native}/app-symbols.map"
++        "LINKER:--version-script,${_RPCS3_PS5_NATIVE_APP_DIR}/native-title-local.map"
++        "LINKER:--exclude-libs,ALL")
++    target_link_libraries(${target} PRIVATE RPCS3::PS5Vulkan)
++    # These are host-link descriptors for imports; they are never packaged.
++    file(GLOB _system_imports "${PS5_PAYLOAD_SDK}/target/lib/*.so")
++    list(FILTER _system_imports EXCLUDE REGEX "/(libkernel_sys|libScePosixForWebKit)[.]so$")
++    target_link_libraries(${target} PRIVATE SceLibcInternal kernel_web SceNet
++        "-Wl,--as-needed" ${_system_imports} "-Wl,--no-as-needed")
++endfunction()
+--- /dev/null
++++ b/ps5/qt/QtPlatform.cmake
+@@ -0,0 +1,19 @@
++# Injected after QtBase's project(), for the PS5 target only.
++if(NOT PS5 OR NOT CMAKE_CROSSCOMPILING)
++    message(FATAL_ERROR "QtPlatform.cmake is only for the native PS5 target")
++endif()
++include("${CMAKE_CURRENT_LIST_DIR}/../graphics/PS5Graphics.cmake")
++if(NOT TARGET WrapOpenGL::WrapOpenGL)
++    add_library(WrapOpenGL::WrapOpenGL INTERFACE IMPORTED GLOBAL)
++    set_property(TARGET WrapOpenGL::WrapOpenGL PROPERTY
++        INTERFACE_LINK_LIBRARIES PS5OpenGL::OpenGL)
++endif()
++if(NOT TARGET EGL::EGL)
++    add_library(EGL::EGL INTERFACE IMPORTED GLOBAL)
++    set_property(TARGET EGL::EGL PROPERTY INTERFACE_LINK_LIBRARIES PS5OpenGL::OpenGL)
++endif()
++# These are native provider hints. Qt still compiles and links its EGL test.
++set(EGL_INCLUDE_DIR "${RPCS3_PS5_OPENGL_ROOT}/include" CACHE PATH "Native PS5 EGL headers")
++set(EGL_LIBRARY PS5OpenGL::OpenGL CACHE STRING "Native PS5 EGL provider")
++set(OPENGL_INCLUDE_DIR "${RPCS3_PS5_OPENGL_ROOT}/include" CACHE PATH "Native PS5 GL headers")
++set(OPENGL_gl_LIBRARY "${RPCS3_PS5_OPENGL_ROOT}/lib/libPS5OpenGL.a" CACHE FILEPATH "Native PS5 GL archive group")
+--- /dev/null
++++ b/ps5/qt/bootstrap.cpp
+@@ -0,0 +1,59 @@
++#include <QtCore/QByteArray>
++#include <ps5platform/klog.h>
++#include <cstdio>
++#include <cerrno>
++#include <array>
++#include <sys/stat.h>
++#include "native_paths.h"
++// qt_add_plugin propagates the generated static plugin initializer to this app.
++
++extern "C" {
++    int sceSystemServiceLoadExec(const char *, const char *const *);
++    int sceKernelUsleep(unsigned int);
++    const char *sceKernelGetFsSandboxRandomWord();
++}
++
++// Native-title exit pattern used by PS5_DevilutionX and the public RPCS3 port.
++// The shell closes the title asynchronously after QApplication has shut down.
++extern "C" void catchReturnFromMain(int status)
++{
++    std::fprintf(stderr, "RPCS3 Qt app: main returned %d; requesting native exit\n", status);
++    std::fflush(nullptr);
++    const int result = sceSystemServiceLoadExec("exit", nullptr);
++    if (result != 0) {
++        std::fprintf(stderr, "RPCS3 Qt app: native exit failed: 0x%08x\n", unsigned(result));
++        return;
++    }
++    for (;;) sceKernelUsleep(100000);
++}
++
++namespace rpcs3::ps5
++{
++    void initialize_qt_platform()
++    {
++        const int logging = ps5_klog_capture_stderr("[RPCS3-Qt] ");
++        std::fprintf(stderr, "Native Qt startup; klog capture result %d\n", logging);
++        const auto directoryExists = [](const QByteArray &path) {
++            struct stat info{};
++            return ::stat(path.constData(), &info) == 0 && S_ISDIR(info.st_mode);
++        };
++        QByteArray appRoot(native_paths::app_directory().c_str());
++        if (appRoot.size() > 1) appRoot.chop(1);
++        qputenv("RPCS3_PS5_APP_ROOT", appRoot);
++        QByteArray dataRoot(native_paths::data_directory().c_str());
++        if (dataRoot.size() > 1) dataRoot.chop(1);
++        for (const QByteArray &path : std::array<QByteArray, 3>{dataRoot, dataRoot + "/cache", dataRoot + "/tmp"}) {
++            if (::mkdir(path.constData(), 0777) != 0 && errno != EEXIST)
++                qFatal("Cannot create the native data directory %s: errno %d", path.constData(), errno);
++            if (!directoryExists(path)) qFatal("The native data path is not a directory: %s", path.constData());
++        }
++        qputenv("RPCS3_PS5_DATA_ROOT", dataRoot);
++        qputenv("HOME", dataRoot);
++        qputenv("TMPDIR", dataRoot + "/tmp");
++        qputenv("XDG_RUNTIME_DIR", dataRoot + "/tmp");
++        std::fprintf(stderr, "Native app mount %s; data %s\n", appRoot.constData(), dataRoot.constData());
++        // Select the native platform before run_rpcs3 constructs QApplication.
++        // RPCS3's existing widgets, menus and settings remain the frontend.
++        qputenv("QT_QPA_PLATFORM", QByteArrayLiteral("ps5"));
++    }
++}
+--- /dev/null
++++ b/ps5/qt/bootstrap_core.cpp
+@@ -0,0 +1,17 @@
++#include <QtCore/QByteArray>
++#include <QtCore/QtGlobal>
++#include <string>
++#include "native_paths.h"
++
++namespace rpcs3::ps5
++{
++    void initialize_core_paths()
++    {
++        const QByteArray app = qgetenv("RPCS3_PS5_APP_ROOT");
++        const QByteArray data = qgetenv("RPCS3_PS5_DATA_ROOT");
++        if (app.isEmpty() || data.isEmpty()) qFatal("Initialize native app paths before the emulator core");
++        if (native_paths::directory(std::string(app.constData(), app.size())) != native_paths::app_directory()
++            || native_paths::directory(std::string(data.constData(), data.size())) != native_paths::data_directory())
++            qFatal("Native paths changed after static configuration initialization");
++    }
++}
+--- /dev/null
++++ b/ps5/qt/display_handoff.cpp
+@@ -0,0 +1,33 @@
++#include "display_handoff.h"
++#include "../graphics/vulkan_runtime.h"
++#include <QtCore/QCoreApplication>
++#include <QtGui/QGuiApplication>
++
++// Real entry point from our isolated RADV WSI overlay, not a firmware API.
++extern "C" VkResult wsi_videoout_release_output();
++
++namespace rpcs3::ps5
++{
++    namespace
++    {
++        using Transition = bool (*)();
++        bool call(const char *name)
++        {
++            if (!qobject_cast<QGuiApplication *>(QCoreApplication::instance())) return false;
++            const auto transition = reinterpret_cast<Transition>(QGuiApplication::platformFunction(name));
++            return transition && transition();
++        }
++    }
++    bool acquire_qt_display_for_vulkan()
++    {
++        return call("rpcs3.ps5.acquireVulkanDisplay");
++    }
++    bool release_vulkan_display_to_qt()
++    {
++        // Vulkan objects must be gone before closing VideoOut and freeing
++        // memory imported by the destroyed swapchain images.
++        if (wsi_videoout_release_output() != VK_SUCCESS) return false;
++        if (QCoreApplication::closingDown()) return true;
++        return call("rpcs3.ps5.releaseVulkanDisplay");
++    }
++}
+--- /dev/null
++++ b/ps5/qt/display_handoff.h
+@@ -0,0 +1,6 @@
++#pragma once
++namespace rpcs3::ps5
++{
++    bool acquire_qt_display_for_vulkan();
++    bool release_vulkan_display_to_qt();
++}
+--- /dev/null
++++ b/ps5/qt/native-title-local.map
+@@ -0,0 +1,3 @@
++{
++    local: *;
++};
+--- /dev/null
++++ b/ps5/qt/native_filesystem.c
+@@ -0,0 +1,79 @@
++/* Native title filesystem statistics, using the exported libkernel _fstatfs.
++ * The SDK mount.h ABI matches the supplied libkernel syscall and libc's
++ * fstatvfs conversion. No firmware code or runtime addresses are embedded.
++ */
++#include <errno.h>
++#include <fcntl.h>
++#include <limits.h>
++#include <stddef.h>
++#include <stdint.h>
++#include <string.h>
++#include <sys/statvfs.h>
++#include <unistd.h>
++#ifdef __linux__
++#include <sys/vfs.h>
++#define native_fstatfs fstatfs
++#else
++#include <sys/mount.h>
++extern int _fstatfs(int, struct statfs *);
++#define native_fstatfs _fstatfs
++/* The supplied libc uses a 472-byte statfs buffer and these field positions. */
++_Static_assert(sizeof(struct statfs) == 472, "Review native statfs ABI");
++_Static_assert(offsetof(struct statfs, f_flags) == 8, "Review native mount flags");
++_Static_assert(offsetof(struct statfs, f_bsize) == 16, "Review native fragment size");
++_Static_assert(offsetof(struct statfs, f_iosize) == 24, "Review native transfer size");
++_Static_assert(offsetof(struct statfs, f_blocks) == 32, "Review native block counters");
++_Static_assert(offsetof(struct statfs, f_bavail) == 48, "Review native available blocks");
++_Static_assert(offsetof(struct statfs, f_files) == 56, "Review native file counters");
++_Static_assert(offsetof(struct statfs, f_ffree) == 64, "Review native free files");
++#endif
++
++int rpcs3_ps5_fstatvfs(int fd, struct statvfs *result)
++{
++    if (!result) { errno = EFAULT; return -1; }
++    struct statfs status = {0};
++    if (native_fstatfs(fd, &status) != 0) return -1;
++#ifndef __linux__
++    if (status.f_version != STATFS_VERSION) { errno = EIO; return -1; }
++#endif
++    if (status.f_bsize <= 0) { errno = EIO; return -1; }
++    struct statvfs converted = {0};
++    converted.f_blocks = status.f_blocks;
++    converted.f_bfree = status.f_bfree;
++    /* statfs counters can be negative for reserved/overcommitted resources. */
++    converted.f_bavail = status.f_bavail > 0 ? (fsblkcnt_t)status.f_bavail : 0;
++    converted.f_files = status.f_files;
++    converted.f_ffree = status.f_ffree > 0 ? (fsfilcnt_t)status.f_ffree : 0;
++    converted.f_favail = converted.f_ffree;
++    converted.f_frsize = (unsigned long)status.f_bsize;
++#ifdef __linux__
++    if (status.f_frsize > 0) converted.f_frsize = (unsigned long)status.f_frsize;
++    converted.f_bsize = (unsigned long)status.f_bsize;
++    converted.f_flag = (unsigned long)status.f_flags & (ST_RDONLY | ST_NOSUID);
++    converted.f_namemax = (unsigned long)status.f_namelen;
++#else
++    converted.f_bsize = status.f_iosize ? (unsigned long)status.f_iosize : converted.f_frsize;
++    if (status.f_flags & MNT_RDONLY) converted.f_flag |= ST_RDONLY;
++    if (status.f_flags & MNT_NOSUID) converted.f_flag |= ST_NOSUID;
++    converted.f_namemax = status.f_namemax;
++#endif
++    /* POSIX does not prescribe a numeric interpretation of f_fsid. */
++    const size_t id_size = sizeof(converted.f_fsid) < sizeof(status.f_fsid)
++        ? sizeof(converted.f_fsid) : sizeof(status.f_fsid);
++    memcpy(&converted.f_fsid, &status.f_fsid, id_size);
++    *result = converted;
++    return 0;
++}
++
++int rpcs3_ps5_statvfs(const char *path, struct statvfs *result)
++{
++    if (!path || !result) { errno = EFAULT; return -1; }
++    /* NONBLOCK avoids blocking forever when the path names a FIFO/device. */
++    const int fd = open(path, O_RDONLY | O_NONBLOCK | O_CLOEXEC);
++    if (fd < 0) return -1;
++    const int value = rpcs3_ps5_fstatvfs(fd, result);
++    const int saved = errno;
++    close(fd);
++    errno = saved;
++    return value;
++}
+--- /dev/null
++++ b/ps5/qt/native_paths.h
+@@ -0,0 +1,72 @@
++#pragma once
++// Constructor-safe native paths: no Qt dependency and no frontend-owned global
++// std::string has to have run its dynamic initializer before these functions.
++#include <cstdio>
++#include <cerrno>
++#include <cstdlib>
++#include <string>
++#include <sys/stat.h>
++
++extern "C" const char *sceKernelGetFsSandboxRandomWord();
++
++namespace rpcs3::ps5::native_paths {
++inline void ensure_directory(const std::string &path)
++{
++    struct stat info{};
++    if ((::mkdir(path.c_str(), 0777) != 0 && errno != EEXIST)
++        || ::stat(path.c_str(), &info) != 0 || !S_ISDIR(info.st_mode)) {
++        std::fprintf(stderr, "RPCS3 PS5: data directory unavailable: %s (errno %d)\n", path.c_str(), errno);
++        std::abort();
++    }
++}
++inline std::string directory(std::string path)
++{
++    if (path.empty() || path.front() != '/') {
++        std::fprintf(stderr, "RPCS3 PS5: expected an absolute native directory: %s\n", path.c_str());
++        std::abort();
++    }
++    while (path.size() > 1 && path.back() == '/') path.pop_back();
++    if (path.back() != '/') path += '/';
++    return path;
++}
++inline const std::string &data_directory()
++{
++    static const std::string path = [] {
++        const char *value = std::getenv("RPCS3_PS5_DATA_ROOT");
++        auto root = directory(value && *value ? value : "/data/rpcs3");
++        ensure_directory(root);
++        return root;
++    }();
++    return path;
++}
++inline const std::string &cache_directory()
++{
++    static const std::string path = [] {
++        auto root = data_directory() + "cache/";
++        ensure_directory(root);
++        return root;
++    }();
++    return path;
++}
++inline const std::string &app_directory()
++{
++    static const std::string path = [] {
++        auto exists = [](const std::string &candidate) {
++            struct stat info{};
++            return ::stat(candidate.c_str(), &info) == 0 && S_ISDIR(info.st_mode);
++        };
++        const char *value = std::getenv("RPCS3_PS5_APP_ROOT");
++        std::string root = value && *value ? value : "/app0";
++        if (!exists(root)) {
++            const char *word = sceKernelGetFsSandboxRandomWord();
++            if (word && *word) root = std::string("/mnt/sandbox/") + word + "/app0";
++            if (!exists(root)) {
++                std::fprintf(stderr, "RPCS3 PS5: native application mount unavailable: %s\n", root.c_str());
++                std::abort();
++            }
++        }
++        return directory(root);
++    }();
++    return path;
++}
++}
+--- /dev/null
++++ b/ps5/qt/native_posix.c
+@@ -0,0 +1,177 @@
++/* Native-title POSIX adapters.
++ * mkstemp/isatty/link/symlink/readlink adapted from PS5 Platform posix.c,
++ * Copyright (C) 2026 Mihawk, SPDX-License-Identifier: GPL-3.0-or-later
++ * Source: lavavex/PS5_PayloadSDK b5efad528e0ac1b8289f39d72a0e890ff68ff0a6
++ * Altered: separate adapter object; symbolic links report ENOSYS if present;
++ * pathconf reports indeterminate limits instead of fabricating filesystem data.
++ */
++#include <errno.h>
++#include <fcntl.h>
++#include <arpa/inet.h>
++#include <netdb.h>
++#include <netinet/in.h>
++#include <stdio.h>
++#include <stddef.h>
++#include <net/if.h>
++#include <string.h>
++#include <sys/ioctl.h>
++#ifndef __linux__
++#include <sys/sockio.h>
++#endif
++#include <sys/socket.h>
++#include <sys/stat.h>
++#include <unistd.h>
++#include <stdint.h>
++#include <stdlib.h>
++#include <wchar.h>
++
++wchar_t *rpcs3_ps5_wcsdup(const wchar_t *text)
++{
++    const size_t length = wcslen(text);
++    if (length >= SIZE_MAX / sizeof(wchar_t)) { errno = ENOMEM; return NULL; }
++    const size_t bytes = (length + 1) * sizeof(wchar_t);
++    wchar_t *copy = malloc(bytes);
++    if (!copy) { errno = ENOMEM; return NULL; }
++    memcpy(copy, text, bytes);
++    return copy;
++}
++
++extern int ps5_mkstemps(char *, int);
++int rpcs3_ps5_mkstemp(char *name) { return ps5_mkstemps(name, 0); }
++int rpcs3_ps5_isatty(int fd)
++{
++    errno = fcntl(fd, F_GETFD) == -1 ? EBADF : ENOTTY;
++    return 0;
++}
++int rpcs3_ps5_link(const char *existing, const char *name)
++{
++    (void)existing; (void)name;
++    errno = EOPNOTSUPP;
++    return -1;
++}
++int rpcs3_ps5_symlink(const char *target, const char *name)
++{
++    (void)target; (void)name;
++    errno = EPERM;
++    return -1;
++}
++ssize_t rpcs3_ps5_readlink(const char *path, char *buffer, size_t size)
++{
++    (void)buffer; (void)size;
++    struct stat status;
++    if (lstat(path, &status) != 0) return -1;
++    errno = S_ISLNK(status.st_mode) ? ENOSYS : EINVAL;
++    return -1;
++}
++long rpcs3_ps5_pathconf(const char *path, int name)
++{
++    struct stat status;
++    if (stat(path, &status) != 0) return -1;
++    if (name != _PC_NAME_MAX && name != _PC_PATH_MAX) {
++        errno = EINVAL;
++        return -1;
++    }
++    /* POSIX: -1 with errno unchanged/zero means an indeterminate limit. */
++    errno = 0;
++    return -1;
++}
++
++unsigned int rpcs3_ps5_if_nametoindex(const char *name)
++{
++    /* Query the real BSD socket interface; never synthesize an interface ID.
++     * The SDK declares SIOCGIFINDEX and ifreq.ifr_index in sys/sockio.h/net/if.h.
++     * Console permission/availability errors are returned to the caller.
++     */
++    struct ifreq request;
++    if (!name) { errno = EINVAL; return 0; }
++    const size_t size = strlen(name);
++    if (size == 0 || size >= sizeof(request.ifr_name)) { errno = ENXIO; return 0; }
++    memset(&request, 0, sizeof(request));
++    memcpy(request.ifr_name, name, size + 1);
++    const int descriptor = socket(AF_INET, SOCK_DGRAM, 0);
++    if (descriptor < 0) return 0;
++    const int result = ioctl(descriptor, SIOCGIFINDEX, &request);
++    const int saved_errno = errno;
++    close(descriptor);
++    if (result < 0) { errno = saved_errno; return 0; }
++#ifdef __linux__
++    return (unsigned int)request.ifr_ifindex;
++#else
++    return (unsigned short)request.ifr_index;
++#endif
++}
++
++const char *rpcs3_ps5_gai_strerror(int error)
++{
++    switch (error) {
++    case 0: return "Success";
++#ifdef EAI_ADDRFAMILY
++    case EAI_ADDRFAMILY: return "Address family not supported for this host";
++#endif
++    case EAI_AGAIN: return "Temporary name resolution failure";
++    case EAI_BADFLAGS: return "Invalid address lookup flags";
++    case EAI_FAIL: return "Name resolution failed";
++    case EAI_FAMILY: return "Unsupported address family";
++    case EAI_MEMORY: return "Memory allocation failure";
++#if defined(EAI_NODATA) && EAI_NODATA != EAI_NONAME
++    case EAI_NODATA: return "No address associated with this host";
++#endif
++    case EAI_NONAME: return "Host or service name not found";
++    case EAI_SERVICE: return "Unsupported service";
++    case EAI_SOCKTYPE: return "Unsupported socket type";
++    case EAI_SYSTEM: return "System error; inspect errno";
++#ifdef EAI_BADHINTS
++    case EAI_BADHINTS: return "Invalid address lookup hints";
++#endif
++#ifdef EAI_PROTOCOL
++    case EAI_PROTOCOL: return "Unknown protocol";
++#endif
++    case EAI_OVERFLOW: return "Address buffer too small";
++    default: return "Unknown address lookup error";
++    }
++}
++
++int rpcs3_ps5_getnameinfo(const struct sockaddr *address, socklen_t length,
++                         char *host, socklen_t host_size,
++                         char *service, socklen_t service_size, int flags)
++{
++    /* Numeric IPv4/IPv6 and ports work without a POSIX resolver database.
++     * Default lookups use the permitted numeric fallback. A caller requiring
++     * a reverse DNS name receives EAI_NONAME, never a fabricated host name.
++     */
++    int supported_flags = NI_NOFQDN | NI_NUMERICHOST | NI_NAMEREQD | NI_NUMERICSERV | NI_DGRAM;
++#ifdef NI_WITHSCOPEID
++    supported_flags |= NI_WITHSCOPEID;
++#endif
++    if (flags & ~supported_flags) return EAI_BADFLAGS;
++    if (!address || length < offsetof(struct sockaddr, sa_family) + sizeof(address->sa_family))
++        return EAI_FAMILY;
++    if ((!host || !host_size) && (!service || !service_size)) return EAI_NONAME;
++    const void *binary;
++    unsigned int port, scope = 0;
++    if (address->sa_family == AF_INET && length >= sizeof(struct sockaddr_in)) {
++        const struct sockaddr_in *ipv4 = (const struct sockaddr_in *)address;
++        binary = &ipv4->sin_addr;
++        port = ntohs(ipv4->sin_port);
++    } else if (address->sa_family == AF_INET6 && length >= sizeof(struct sockaddr_in6)) {
++        const struct sockaddr_in6 *ipv6 = (const struct sockaddr_in6 *)address;
++        binary = &ipv6->sin6_addr;
++        port = ntohs(ipv6->sin6_port);
++        scope = ipv6->sin6_scope_id;
++    } else return EAI_FAMILY;
++    if (host && host_size && (flags & NI_NAMEREQD) && !(flags & NI_NUMERICHOST)) return EAI_NONAME;
++    char numeric[INET6_ADDRSTRLEN], scoped[INET6_ADDRSTRLEN + 12], port_text[6];
++    if (!inet_ntop(address->sa_family, binary, numeric, sizeof(numeric))) return EAI_SYSTEM;
++    const char *host_text = numeric;
++    if (scope) {
++        snprintf(scoped, sizeof(scoped), "%s%%%u", numeric, scope);
++        host_text = scoped;
++    }
++    snprintf(port_text, sizeof(port_text), "%u", port);
++    const size_t host_length = strlen(host_text) + 1, port_length = strlen(port_text) + 1;
++    if ((host && host_size && host_length > host_size) ||
++        (service && service_size && port_length > service_size)) return EAI_OVERFLOW;
++    if (host && host_size) memcpy(host, host_text, host_length);
++    if (service && service_size) memcpy(service, port_text, port_length);
++    return 0;
++}
+--- /dev/null
++++ b/ps5/qt/qpa/pad_broker.h
+@@ -0,0 +1,7 @@
++#pragma once
++// Shared ownership of native pad handles within this application process.
++extern "C" {
++int rpcs3_ps5_pad_initialize();
++int rpcs3_ps5_pad_acquire(int user);
++int rpcs3_ps5_pad_release(int handle);
++}
+--- /dev/null
++++ b/ps5/toolchain.cmake
+@@ -0,0 +1,19 @@
++# RPCS3 native PS5 build. Use the SDK toolchain, not the Ubuntu sysroot.
++if(NOT DEFINED PS5_PAYLOAD_SDK)
++    if(DEFINED ENV{PS5_PAYLOAD_SDK})
++        set(PS5_PAYLOAD_SDK "$ENV{PS5_PAYLOAD_SDK}" CACHE PATH "PS5 payload SDK")
++    else()
++        message(FATAL_ERROR "Set PS5_PAYLOAD_SDK to the PS5 SDK or its private LLVM overlay")
++    endif()
++endif()
++include("${PS5_PAYLOAD_SDK}/toolchain/prospero.cmake")
++list(APPEND CMAKE_TRY_COMPILE_PLATFORM_VARIABLES PS5_PAYLOAD_SDK PS5_DEPS_PREFIX)
++if(DEFINED PS5_DEPS_PREFIX)
++    list(PREPEND CMAKE_FIND_ROOT_PATH "${PS5_DEPS_PREFIX}")
++    list(PREPEND CMAKE_PREFIX_PATH "${PS5_DEPS_PREFIX}")
++endif()
++# Never select instruction sets from the development PC.
++set(USE_NATIVE_INSTRUCTIONS OFF CACHE BOOL "Use the console CPU target")
++# These sources use headers, not C++ module units. Do not require the optional
++# host clang-scan-deps tool just because the console compiler supports C++20.
++set(CMAKE_CXX_SCAN_FOR_MODULES OFF CACHE BOOL "No C++ module scanning for the native port")
+--- a/rpcs3/CMakeLists.txt
++++ b/rpcs3/CMakeLists.txt
+@@ -10,7 +10,7 @@
+ 
+ set(CMAKE_CXX_STANDARD 23)
+ 
+-if(UNIX AND NOT APPLE AND NOT ANDROID)
++if(UNIX AND NOT APPLE AND NOT ANDROID AND NOT PS5)
+     add_compile_definitions(DATADIR="${CMAKE_INSTALL_FULL_DATADIR}/rpcs3")
+     # Optionally enable X11 for window management
+     find_package(X11)
+@@ -73,6 +73,9 @@
+     if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+         #on some Linux distros shm_unlink and similar functions are in librt only
+         target_link_libraries(rpcs3_lib PRIVATE rt)
++    elseif(PS5)
++        find_package(Iconv REQUIRED)
++        target_link_libraries(rpcs3_lib PRIVATE Iconv::Iconv)
+     elseif(NOT WIN32 AND NOT CMAKE_CXX_FLAGS MATCHES "LIBICONV_PLUG")
+         #it seems like glibc includes the iconv functions we use but other libc
+         #implementations like the one on OSX don't seem implement them
+@@ -82,7 +85,7 @@
+     # Unix display manager
+     if(X11_FOUND)
+         target_link_libraries(rpcs3_lib PRIVATE X11::X11 xkbcommon-x11)
+-    elseif(USE_VULKAN AND UNIX AND NOT WAYLAND_FOUND AND NOT APPLE AND NOT ANDROID)
++    elseif(USE_VULKAN AND UNIX AND NOT WAYLAND_FOUND AND NOT APPLE AND NOT ANDROID AND NOT PS5)
+         # Wayland has been checked in 3rdparty/CMakeLists.txt already.
+         message(FATAL_ERROR "RPCS3 requires either X11 or Wayland (or both) for Vulkan.")
+     endif()
+@@ -119,6 +122,16 @@
+         PRIVATE
+             rpcs3_lib
+     )
++
++    if(PS5)
++        target_sources(rpcs3 PRIVATE "${CMAKE_SOURCE_DIR}/ps5/qt/bootstrap.cpp")
++        target_sources(rpcs3 PRIVATE "${CMAKE_SOURCE_DIR}/ps5/qt/bootstrap_core.cpp")
++        target_link_libraries(rpcs3 PRIVATE Qt6::Core Qt6::Gui RPCS3Qt::PS5IntegrationPlugin)
++        target_sources(rpcs3_lib PRIVATE "${CMAKE_SOURCE_DIR}/ps5/qt/display_handoff.cpp")
++        target_link_libraries(rpcs3_lib PRIVATE Qt6::Gui RPCS3::PS5Vulkan)
++        include("${CMAKE_SOURCE_DIR}/ps5/qt/NativeApp.cmake")
++        rpcs3_ps5_native_application(rpcs3)
++    endif()
+ 
+     if(USE_PRECOMPILED_HEADERS)
+         target_precompile_headers(rpcs3 PRIVATE stdafx.h)
+@@ -221,3 +234,8 @@
+      )
+     endif()
+ endif()
++
++if(PS5)
++    target_sources(rpcs3_lib PRIVATE "${CMAKE_SOURCE_DIR}/ps5/input/ps5_pad_handler.cpp")
++    target_link_libraries(rpcs3_lib PRIVATE ScePad SceUserService)
++endif()
+--- a/rpcs3/Emu/CMakeLists.txt
++++ b/rpcs3/Emu/CMakeLists.txt
+@@ -20,6 +20,14 @@
+     IPC_config.cpp
+     IPC_socket.cpp
+ )
++
++if(PS5)
++    find_package(Iconv REQUIRED)
++    # Only cellL10n consumes iconv headers; keep that dependency source-local.
++    set_property(SOURCE Cell/Modules/cellL10n.cpp APPEND PROPERTY
++        INCLUDE_DIRECTORIES "${Iconv_INCLUDE_DIRS}")
++    target_link_libraries(rpcs3_emu PRIVATE "$<LINK_ONLY:Iconv::Iconv>")
++endif()
+ 
+ if(USE_LTO)
+     set_target_properties(rpcs3_emu PROPERTIES INTERPROCEDURAL_OPTIMIZATION ON)
+@@ -150,8 +158,9 @@
+     Audio/audio_utils.cpp
+     Audio/AudioDumper.cpp
+     Audio/AudioBackend.cpp
+-    Audio/Cubeb/CubebBackend.cpp
+-    Audio/Cubeb/cubeb_enumerator.cpp
++    $<$<BOOL:${PS5}>:${CMAKE_SOURCE_DIR}/ps5/audio/ps5_audio_backend.cpp>
++    $<$<NOT:$<BOOL:${PS5}>>:Audio/Cubeb/CubebBackend.cpp>
++    $<$<NOT:$<BOOL:${PS5}>>:Audio/Cubeb/cubeb_enumerator.cpp>
+ )
+ 
+ if(USE_FAUDIO)
+@@ -688,7 +697,8 @@
+         3rdparty::libusb
+         3rdparty::wolfssl
+         3rdparty::openal
+-        3rdparty::cubeb
++        $<$<NOT:$<BOOL:${PS5}>>:3rdparty::cubeb>
++        $<$<BOOL:${PS5}>:SceAudioOut>
+         3rdparty::soundtouch
+         3rdparty::miniupnpc
+         3rdparty::libevdev
+@@ -721,3 +731,10 @@
+ if(WAYLAND_FOUND)
+     target_link_libraries(rpcs3_emu PRIVATE OpenGL::EGL)
+ endif()
++
++if(PS5)
++    target_sources(rpcs3_emu PRIVATE "${CMAKE_SOURCE_DIR}/Utilities/exception_info.cpp")
++    set_source_files_properties("${CMAKE_SOURCE_DIR}/Utilities/exception_info.cpp"
++        TARGET_DIRECTORY rpcs3_emu PROPERTIES COMPILE_OPTIONS "-fexceptions" SKIP_PRECOMPILE_HEADERS ON)
++    target_include_directories(rpcs3_emu PRIVATE "${RPCS3_PS5_RUNTIME_EXTENSION_ROOT}/include")
++endif()
+--- a/rpcs3/Emu/Cell/Modules/cellMic.cpp
++++ b/rpcs3/Emu/Cell/Modules/cellMic.cpp
+@@ -87,7 +87,11 @@
+ void fmt_class_string<fmt::alc_error>::format(std::string& out, u64 arg)
+ {
+ 	const fmt::alc_error& obj = get_object(arg);
++#ifdef WITHOUT_OPENAL
++	fmt::append(out, "0x%x", obj.error);
++#else
+ 	fmt::append(out, "0x%x='%s'", obj.error, alcGetString(obj.device, obj.error));
++#endif
+ }
+ 
+ void mic_context::operator()()
+--- a/rpcs3/Emu/Cell/lv2/sys_rsxaudio.cpp
++++ b/rpcs3/Emu/Cell/lv2/sys_rsxaudio.cpp
+@@ -2006,6 +2006,12 @@
+ 	const long nsecs = (interval - secs * 1'000'000) * 1000;
+ 	const itimerspec tspec = {{}, { secs, nsecs }};
+ 	ensure(timerfd_settime(timer_handle, 0, &tspec, nullptr) == 0);
++#elif defined(__PROSPERO__)
++	{
++		std::lock_guard lock(tmr_mutex);
++		tmr_deadline = interval ? get_system_time() + interval : 0;
++	}
++	tmr_cv.notify_all();
+ #elif defined(BSD) || defined(__APPLE__)
+ 	handle[TIMER_ID].data = interval * 1000;
+ 	if (interval)
+@@ -2041,6 +2047,16 @@
+ 		const auto wr_res = write(cancel_event, &flag, sizeof(flag));
+ 		ensure(wr_res == sizeof(flag) || errno == EAGAIN);
+ 	}
++#elif defined(__PROSPERO__)
++	{
++		std::lock_guard lock(tmr_mutex);
++		tmr_deadline = 0;
++		if (in_wait)
++		{
++			tmr_canceled = true;
++		}
++	}
++	tmr_cv.notify_all();
+ #elif defined(BSD) || defined(__APPLE__)
+ 	handle[TIMER_ID].flags = (handle[TIMER_ID].flags & ~EV_ENABLE) | EV_DISABLE;
+ 	handle[TIMER_ID].data = 0;
+@@ -2064,6 +2080,9 @@
+ #elif defined(__linux__)
+ 	u64 tmp_buf{};
+ 	[[maybe_unused]] const auto nread = read(cancel_event, &tmp_buf, sizeof(tmp_buf));
++#elif defined(__PROSPERO__)
++	std::lock_guard lock(tmr_mutex);
++	tmr_canceled = false;
+ #elif defined(BSD) || defined(__APPLE__)
+ 	// Cancel event is reset automatically
+ #else
+@@ -2085,6 +2104,8 @@
+ 	cancel_event = eventfd(0, EFD_NONBLOCK);
+ 	evnt.data.fd = cancel_event;
+ 	ensure(cancel_event >= 0 && epoll_ctl(epoll_fd, EPOLL_CTL_ADD, cancel_event, &evnt) == 0);
++#elif defined(__PROSPERO__)
++	// Nothing to create
+ #elif defined(BSD) || defined(__APPLE__)
+ 
+ #if defined(__APPLE__)
+@@ -2112,6 +2133,8 @@
+ 	close(epoll_fd);
+ 	close(timer_handle);
+ 	close(cancel_event);
++#elif defined(__PROSPERO__)
++	// Nothing to close
+ #elif defined(BSD) || defined(__APPLE__)
+ 	close(kq);
+ #else
+@@ -2183,6 +2206,35 @@
+ 				}
+ 			}
+ 		}
++#elif defined(__PROSPERO__)
++		{
++			std::unique_lock tmr_lock(tmr_mutex);
++
++			while (true)
++			{
++				if (tmr_canceled)
++				{
++					wait_canceled = true;
++					break;
++				}
++
++				if (!tmr_deadline)
++				{
++					tmr_cv.wait(tmr_lock);
++					continue;
++				}
++
++				const u64 now = get_system_time();
++				if (now >= tmr_deadline)
++				{
++					// One shot, as the other platforms' timers
++					tmr_deadline = 0;
++					break;
++				}
++
++				tmr_cv.wait_for(tmr_lock, std::chrono::microseconds(tmr_deadline - now));
++			}
++		}
+ #elif defined(BSD) || defined(__APPLE__)
+ 		struct kevent event[obj_wait_cnt]{};
+ 		int wait_status = 0;
+--- a/rpcs3/Emu/Cell/lv2/sys_rsxaudio.h
++++ b/rpcs3/Emu/Cell/lv2/sys_rsxaudio.h
+@@ -1,4 +1,7 @@
+ #pragma once
++
++#include <condition_variable>
++#include <mutex>
+ 
+ #include "sys_sync.h"
+ #include "sys_event.h"
+@@ -261,6 +264,13 @@
+ 	int cancel_event{};
+ 	int timer_handle{};
+ 	int epoll_fd{};
++#elif defined(__PROSPERO__)
++	// The PS5 kernel's kqueue never delivers the EVFILT_USER cancel: a deadline and a flag
++	// behind a condition variable stand in for the timer and the cancel event
++	std::mutex tmr_mutex;
++	std::condition_variable tmr_cv;
++	u64 tmr_deadline = 0; // get_system_time() microseconds; 0 = disarmed
++	bool tmr_canceled = false;
+ #elif defined(BSD) || defined(__APPLE__)
+ 	static constexpr u64 TIMER_ID = 0;
+ 	static constexpr u64 CANCEL_ID = 1;
+--- a/rpcs3/Emu/Io/pad_config.cpp
++++ b/rpcs3/Emu/Io/pad_config.cpp
+@@ -171,8 +171,13 @@
+ 
+ 	// Add keyboard by default
+ 	input_log.notice("Input configuration empty. Adding default keyboard pad handler");
++#ifdef RPCS3_PS5
++    player[0]->handler.from_string("ScePad");
++    player[0]->device.from_string("DualSense 1");
++#else
+ 	player[0]->handler.from_string(fmt::format("%s", pad_handler::keyboard));
+ 	player[0]->device.from_string(pad::keyboard_device_name.data());
++#endif
+ 	player[0]->buddy_device.from_string(""sv);
+ 
+ 	return false;
+--- a/rpcs3/Emu/Io/pad_config_types.cpp
++++ b/rpcs3/Emu/Io/pad_config_types.cpp
+@@ -10,6 +10,9 @@
+ 		{
+ 		case pad_handler::null: return "Null";
+ 		case pad_handler::keyboard: return "Keyboard";
++#ifdef RPCS3_PS5
++		case pad_handler::scepad: return "ScePad";
++#endif
+ 		case pad_handler::ds3: return "DualShock 3";
+ 		case pad_handler::ds4: return "DualShock 4";
+ 		case pad_handler::dualsense: return "DualSense";
+--- a/rpcs3/Emu/Io/pad_config_types.h
++++ b/rpcs3/Emu/Io/pad_config_types.h
+@@ -6,6 +6,9 @@
+ {
+ 	null,
+ 	keyboard,
++#ifdef RPCS3_PS5
++	scepad,
++#endif
+ 	ds3,
+ 	ds4,
+ 	dualsense,
+--- a/rpcs3/Emu/Memory/vm.cpp
++++ b/rpcs3/Emu/Memory/vm.cpp
+@@ -28,7 +28,14 @@
+ {
+ 	static u8* memory_reserve_4GiB(void* _addr, u64 size = 0x100000000, bool is_memory_mapping = false)
+ 	{
+-		for (u64 addr = reinterpret_cast<u64>(_addr) + 0x100000000; addr < 0x8000'0000'0000; addr += 0x100000000)
++#ifdef __PROSPERO__
++		// RADV's GPU window is 0x2'0000'0000 - 0x2'FFFF'FFFF and the low ranges are small:
++		// guest memory starts at 64 GiB (measured: 16 GiB fits at a hint from there up to 512 GiB)
++		const u64 start = std::max<u64>(reinterpret_cast<u64>(_addr) + 0x100000000, 0x10'0000'0000);
++#else
++		const u64 start = reinterpret_cast<u64>(_addr) + 0x100000000;
++#endif
++		for (u64 addr = start; addr < 0x8000'0000'0000; addr += 0x100000000)
+ 		{
+ 			if (auto ptr = utils::memory_reserve(size, reinterpret_cast<void*>(addr), is_memory_mapping, false))
+ 			{
+@@ -2225,7 +2232,9 @@
+ 
+ 	inline namespace ps3_
+ 	{
++#ifndef __PROSPERO__
+ 		static utils::shm s_hook{0x800000000, ""};
++#endif
+ 
+ 		void init()
+ 		{
+@@ -2264,7 +2273,12 @@
+ #ifdef _WIN32
+ 			utils::memory_release(g_hook_addr, 0x800000000);
+ #endif
++#ifndef __PROSPERO__
+ 			ensure(s_hook.map(g_hook_addr, utils::protection::rw, true));
++#else
++			// A 32 GiB copy-on-write view of zeros has no direct-memory form; nothing reads the hook
++			// area (mihawk-99's port notes), so it stays a reservation
++#endif
+ 		}
+ 	}
+ 
+--- a/rpcs3/Emu/RSX/GL/OpenGL.cpp
++++ b/rpcs3/Emu/RSX/GL/OpenGL.cpp
+@@ -1,7 +1,7 @@
+ #include "stdafx.h"
+ #include "OpenGL.h"
+ 
+-#if defined(HAVE_WAYLAND)
++#if defined(HAVE_WAYLAND) || defined(RPCS3_PS5)
+ #include <EGL/egl.h>
+ #endif
+ 
+@@ -45,6 +45,12 @@
+ {
+ #ifdef _WIN32
+ 	wglSwapIntervalEXT(interval);
++#elif defined(RPCS3_PS5)
++	const auto display = eglGetCurrentDisplay();
++	if (display == EGL_NO_DISPLAY || !eglSwapInterval(display, interval))
++	{
++		rsx_log.error("PS5 EGL swap interval %d failed (EGL error 0x%x)", interval, eglGetError());
++	}
+ #elif defined(HAVE_X11)
+ 	if (glXSwapIntervalEXT)
+ 	{
+--- a/rpcs3/Emu/RSX/VK/VulkanAPI.h
++++ b/rpcs3/Emu/RSX/VK/VulkanAPI.h
+@@ -21,7 +21,12 @@
+ #pragma warning( disable : 4005 )
+ #endif
+ 
++#ifdef RPCS3_PS5
++#include <volk.h>
++#include "ps5/graphics/vulkan_runtime.h"
++#else
+ #include <vulkan/vulkan.h>
++#endif
+ 
+ #ifdef _MSC_VER
+ #pragma warning(pop)
+--- a/rpcs3/Emu/RSX/VK/vkutils/device.cpp
++++ b/rpcs3/Emu/RSX/VK/vkutils/device.cpp
+@@ -810,6 +810,10 @@
+ 			dump_debug_info(requested_extensions, enabled_features);
+ 			vk::die_with_error(error);
+ 		}
++
++#ifdef RPCS3_PS5
++		rpcs3::ps5::load_vulkan_device(dev);
++#endif
+ 
+ 		// Dump some diagnostics to the log
+ 		rsx_log.notice("%u extensions loaded:", ::size32(requested_extensions));
+--- a/rpcs3/Emu/RSX/VK/vkutils/instance.cpp
++++ b/rpcs3/Emu/RSX/VK/vkutils/instance.cpp
+@@ -1,381 +1,429 @@
+-#include "stdafx.h"
+-#include "instance.h"
+-
+-namespace vk
+-{
+-	// Supported extensions
+-	supported_extensions::supported_extensions(enumeration_class _class, const char* layer_name, VkPhysicalDevice pdev)
+-	{
+-		u32 count;
+-		if (_class == enumeration_class::instance)
+-		{
+-			if (vkEnumerateInstanceExtensionProperties(layer_name, &count, nullptr) != VK_SUCCESS)
+-				return;
+-		}
+-		else
+-		{
+-			ensure(pdev);
+-			if (vkEnumerateDeviceExtensionProperties(pdev, layer_name, &count, nullptr) != VK_SUCCESS)
+-				return;
+-		}
+-
+-		m_vk_exts.resize(count);
+-		if (_class == enumeration_class::instance)
+-		{
+-			vkEnumerateInstanceExtensionProperties(layer_name, &count, m_vk_exts.data());
+-		}
+-		else
+-		{
+-			vkEnumerateDeviceExtensionProperties(pdev, layer_name, &count, m_vk_exts.data());
+-		}
+-	}
+-
+-	bool supported_extensions::is_supported(std::string_view ext) const
+-	{
+-		return std::any_of(m_vk_exts.cbegin(), m_vk_exts.cend(), [&](const VkExtensionProperties& p) { return p.extensionName == ext; });
+-	}
+-
+-	// Instance
+-	instance::~instance()
+-	{
+-		if (m_instance)
+-		{
+-			destroy();
+-		}
+-	}
+-
+-	void instance::destroy()
+-	{
+-		if (!m_instance) return;
+-
+-		if (m_debugger)
+-		{
+-			_vkDestroyDebugReportCallback(m_instance, m_debugger, nullptr);
+-			m_debugger = nullptr;
+-		}
+-
+-		if (m_surface)
+-		{
+-			vkDestroySurfaceKHR(m_instance, m_surface, nullptr);
+-			m_surface = VK_NULL_HANDLE;
+-		}
+-
+-		vkDestroyInstance(m_instance, nullptr);
+-		m_instance = VK_NULL_HANDLE;
+-	}
+-
+-	void instance::enable_debugging()
+-	{
+-		if (!g_cfg.video.debug_output) return;
+-
+-		PFN_vkDebugReportCallbackEXT callback = vk::dbgFunc;
+-
+-		_vkCreateDebugReportCallback = reinterpret_cast<PFN_vkCreateDebugReportCallbackEXT>(vkGetInstanceProcAddr(m_instance, "vkCreateDebugReportCallbackEXT"));
+-		_vkDestroyDebugReportCallback = reinterpret_cast<PFN_vkDestroyDebugReportCallbackEXT>(vkGetInstanceProcAddr(m_instance, "vkDestroyDebugReportCallbackEXT"));
+-
+-		VkDebugReportCallbackCreateInfoEXT dbgCreateInfo = {};
+-		dbgCreateInfo.sType = VK_STRUCTURE_TYPE_DEBUG_REPORT_CREATE_INFO_EXT;
+-		dbgCreateInfo.pfnCallback = callback;
+-		dbgCreateInfo.flags = VK_DEBUG_REPORT_ERROR_BIT_EXT | VK_DEBUG_REPORT_WARNING_BIT_EXT;
+-
+-		CHECK_RESULT(_vkCreateDebugReportCallback(m_instance, &dbgCreateInfo, NULL, &m_debugger));
+-	}
+-
+-#ifdef __clang__
+-#pragma clang diagnostic push
+-#pragma clang diagnostic ignored "-Wold-style-cast"
+-#endif
+-	bool instance::create(const char* app_name, bool fast)
+-	{
+-		// Initialize a vulkan instance
+-		VkApplicationInfo app = {};
+-
+-		app.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO;
+-		app.pApplicationName = app_name;
+-		app.applicationVersion = 0;
+-		app.pEngineName = app_name;
+-		app.engineVersion = 0;
+-		app.apiVersion = VK_API_VERSION_1_2;
+-
+-		// Set up instance information
+-
+-		std::vector<const char*> extensions;
+-		std::vector<const char*> layers;
+-		const void* next_info = nullptr;
+-
+-#ifdef __APPLE__
+-		// Declare MVK variables here to ensure the lifetime within the entire scope
+-		const VkBool32 setting_true = VK_TRUE;
+-		const int32_t setting_fast_math = g_cfg.video.disable_msl_fast_math.get() ? MVK_CONFIG_FAST_MATH_NEVER : MVK_CONFIG_FAST_MATH_ON_DEMAND;
+-
+-		std::vector<VkLayerSettingEXT> mvk_settings;
+-		VkLayerSettingsCreateInfoEXT mvk_layer_settings_create_info{};
+-#endif
+-
+-		if (!fast)
+-		{
+-			extensions_loaded = true;
+-			supported_extensions support(supported_extensions::instance);
+-
+-			extensions.push_back(VK_KHR_SURFACE_EXTENSION_NAME);
+-			if (support.is_supported(VK_EXT_DEBUG_REPORT_EXTENSION_NAME))
+-			{
+-				extensions.push_back(VK_EXT_DEBUG_REPORT_EXTENSION_NAME);
+-			}
+-
+-#ifdef __APPLE__
+-			extensions.push_back(VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME);
+-			extensions.push_back(VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME);
+-			if (support.is_supported(VK_EXT_LAYER_SETTINGS_EXTENSION_NAME))
+-			{
+-				extensions.push_back(VK_EXT_LAYER_SETTINGS_EXTENSION_NAME);
+-
+-				mvk_settings.push_back(VkLayerSettingEXT{ kMVKMoltenVKDriverLayerName, "MVK_CONFIG_RESUME_LOST_DEVICE", VK_LAYER_SETTING_TYPE_BOOL32_EXT, 1, &setting_true });
+-				mvk_settings.push_back(VkLayerSettingEXT{ kMVKMoltenVKDriverLayerName, "MVK_CONFIG_FAST_MATH_ENABLED", VK_LAYER_SETTING_TYPE_INT32_EXT, 1, &setting_fast_math });
+-
+-				mvk_layer_settings_create_info.sType = VK_STRUCTURE_TYPE_LAYER_SETTINGS_CREATE_INFO_EXT;
+-				mvk_layer_settings_create_info.pNext = next_info;
+-				mvk_layer_settings_create_info.settingCount = static_cast<uint32_t>(mvk_settings.size());
+-				mvk_layer_settings_create_info.pSettings = mvk_settings.data();
+-
+-				next_info = &mvk_layer_settings_create_info;
+-			}
+-#endif
+-
+-			if (support.is_supported(VK_KHR_GET_SURFACE_CAPABILITIES_2_EXTENSION_NAME))
+-			{
+-				extensions.push_back(VK_KHR_GET_SURFACE_CAPABILITIES_2_EXTENSION_NAME);
+-			}
+-
+-			if (g_cfg.video.renderdoc_compatiblity && support.is_supported(VK_EXT_DEBUG_UTILS_EXTENSION_NAME))
+-			{
+-				extensions.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
+-			}
+-
+-#ifdef _WIN32
+-			extensions.push_back(VK_KHR_WIN32_SURFACE_EXTENSION_NAME);
+-#elif defined(__APPLE__)
+-			extensions.push_back(VK_EXT_METAL_SURFACE_EXTENSION_NAME);
+-#else
+-			bool found_surface_ext = false;
+-#ifdef HAVE_X11
+-			if (support.is_supported(VK_KHR_XLIB_SURFACE_EXTENSION_NAME))
+-			{
+-				extensions.push_back(VK_KHR_XLIB_SURFACE_EXTENSION_NAME);
+-				found_surface_ext = true;
+-			}
+-#endif
+-#ifdef HAVE_WAYLAND
+-			if (support.is_supported(VK_KHR_WAYLAND_SURFACE_EXTENSION_NAME))
+-			{
+-				extensions.push_back(VK_KHR_WAYLAND_SURFACE_EXTENSION_NAME);
+-				found_surface_ext = true;
+-			}
+-#endif //(WAYLAND)
+-#ifdef ANDROID
+-			if (support.is_supported(VK_KHR_ANDROID_SURFACE_EXTENSION_NAME))
+-			{
+-				extensions.push_back(VK_KHR_ANDROID_SURFACE_EXTENSION_NAME);
+-				found_surface_ext = true;
+-			}
+-#endif
+-			if (!found_surface_ext)
+-			{
+-				rsx_log.error("Could not find a supported Vulkan surface extension");
+-				return 0;
+-			}
+-#endif //(WIN32, __APPLE__)
+-			if (g_cfg.video.debug_output)
+-				layers.push_back("VK_LAYER_KHRONOS_validation");
+-		}
+-#ifdef __APPLE__ 
+-		// MoltenVK's ICD will not be detected without these extensions enabled.
+-		else
+-		{
+-			extensions_loaded = true;
+-			extensions.push_back(VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME);
+-			extensions.push_back(VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME);
+-		}
+-#endif
+-
+-		VkInstanceCreateInfo instance_info = {};
+-		instance_info.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
+-		instance_info.pApplicationInfo = &app;
+-		instance_info.enabledLayerCount = static_cast<u32>(layers.size());
+-		instance_info.ppEnabledLayerNames = layers.data();
+-#ifdef __APPLE__
+-		instance_info.enabledExtensionCount = static_cast<u32>(extensions.size());
+-		instance_info.ppEnabledExtensionNames = extensions.data();
+-#else
+-		instance_info.enabledExtensionCount = fast ? 0 : static_cast<u32>(extensions.size());
+-		instance_info.ppEnabledExtensionNames = fast ? nullptr : extensions.data();
+-#endif
+-		instance_info.pNext = next_info;
+-#ifdef __APPLE__
+-		instance_info.flags |= VK_INSTANCE_CREATE_ENUMERATE_PORTABILITY_BIT_KHR;
+-#endif
+-
+-		if (VkResult result = vkCreateInstance(&instance_info, nullptr, &m_instance); result != VK_SUCCESS)
+-		{
+-			if (result == VK_ERROR_LAYER_NOT_PRESENT)
+-			{
+-				rsx_log.fatal("Could not initialize layer VK_LAYER_KHRONOS_validation");
+-			}
+-
+-			return false;
+-		}
+-
+-		return true;
+-	}
+-#ifdef __clang__
+-#pragma clang diagnostic pop
+-#endif
+-	void instance::bind()
+-	{
+-		// Register some global states
+-		if (m_debugger)
+-		{
+-			_vkDestroyDebugReportCallback(m_instance, m_debugger, nullptr);
+-			m_debugger = nullptr;
+-		}
+-
+-		enable_debugging();
+-	}
+-
+-	std::vector<physical_device>& instance::enumerate_devices()
+-	{
+-		u32 num_gpus;
+-		// This may fail on unsupported drivers, so just assume no devices
+-		if (vkEnumeratePhysicalDevices(m_instance, &num_gpus, nullptr) != VK_SUCCESS)
+-			return gpus;
+-
+-		if (gpus.size() != num_gpus)
+-		{
+-			std::vector<VkPhysicalDevice> pdevs(num_gpus);
+-			gpus.resize(num_gpus);
+-
+-			CHECK_RESULT(vkEnumeratePhysicalDevices(m_instance, &num_gpus, pdevs.data()));
+-
+-			for (u32 i = 0; i < num_gpus; ++i)
+-				gpus[i].create(m_instance, pdevs[i], extensions_loaded);
+-		}
+-
+-		return gpus;
+-	}
+-
+-	swapchain_base* instance::create_swapchain(display_handle_t window_handle, vk::physical_device& dev)
+-	{
+-		WSI_config surface_config
+-		{
+-			.supports_automatic_wm_reports = true
+-		};
+-		m_surface = make_WSI_surface(m_instance, window_handle, &surface_config);
+-
+-		u32 device_queues = dev.get_queue_count();
+-		std::vector<VkBool32> supports_present(device_queues, VK_FALSE);
+-		bool present_possible = true;
+-
+-		for (u32 index = 0; index < device_queues; index++)
+-		{
+-			vkGetPhysicalDeviceSurfaceSupportKHR(dev, index, m_surface, &supports_present[index]);
+-		}
+-
+-		u32 graphics_queue_idx = -1;
+-		u32 present_queue_idx = -1;
+-		u32 transfer_queue_idx = -1;
+-
+-		auto test_queue_family = [&](u32 index, u32 desired_flags)
+-			{
+-				if (const auto flags = dev.get_queue_properties(index).queueFlags;
+-					(flags & desired_flags) == desired_flags)
+-				{
+-					return true;
+-				}
+-
+-				return false;
+-			};
+-
+-		for (u32 i = 0; i < device_queues; ++i)
+-		{
+-			// 1. Test for a present queue possibly one that also supports present
+-			if (present_queue_idx == umax && supports_present[i])
+-			{
+-				present_queue_idx = i;
+-				if (test_queue_family(i, VK_QUEUE_GRAPHICS_BIT | VK_QUEUE_COMPUTE_BIT))
+-				{
+-					graphics_queue_idx = i;
+-				}
+-			}
+-			// 2. Check for graphics support
+-			else if (graphics_queue_idx == umax && test_queue_family(i, VK_QUEUE_GRAPHICS_BIT | VK_QUEUE_COMPUTE_BIT))
+-			{
+-				graphics_queue_idx = i;
+-				if (supports_present[i])
+-				{
+-					present_queue_idx = i;
+-				}
+-			}
+-			// 3. Check if transfer + compute is available
+-			else if (transfer_queue_idx == umax && test_queue_family(i, VK_QUEUE_COMPUTE_BIT | VK_QUEUE_TRANSFER_BIT))
+-			{
+-				transfer_queue_idx = i;
+-			}
+-		}
+-
+-		if (graphics_queue_idx == umax)
+-		{
+-			rsx_log.fatal("Failed to find a suitable graphics queue");
+-			return nullptr;
+-		}
+-
+-		if (graphics_queue_idx != present_queue_idx)
+-		{
+-			// Separate graphics and present, use headless fallback
+-			present_possible = false;
+-		}
+-
+-		if (!present_possible)
+-		{
+-			//Native(sw) swapchain
+-			rsx_log.error("It is not possible for the currently selected GPU to present to the window (Likely caused by NVIDIA driver running the current display)");
+-			rsx_log.warning("Falling back to software present support (native windowing API)");
+-			auto swapchain = new swapchain_NATIVE(dev, -1, graphics_queue_idx, transfer_queue_idx);
+-			swapchain->create(window_handle);
+-			return swapchain;
+-		}
+-
+-		// Get the list of VkFormat's that are supported:
+-		u32 formatCount;
+-		CHECK_RESULT(vkGetPhysicalDeviceSurfaceFormatsKHR(dev, m_surface, &formatCount, nullptr));
+-
+-		std::vector<VkSurfaceFormatKHR> surfFormats(formatCount);
+-		CHECK_RESULT(vkGetPhysicalDeviceSurfaceFormatsKHR(dev, m_surface, &formatCount, surfFormats.data()));
+-
+-		VkFormat format;
+-		VkColorSpaceKHR color_space;
+-
+-		if (formatCount == 1 && surfFormats[0].format == VK_FORMAT_UNDEFINED)
+-		{
+-			format = VK_FORMAT_B8G8R8A8_UNORM;
+-		}
+-		else
+-		{
+-			if (!formatCount) fmt::throw_exception("Format count is zero!");
+-			format = surfFormats[0].format;
+-
+-			//Prefer BGRA8_UNORM to avoid sRGB compression (RADV)
+-			for (auto& surface_format : surfFormats)
+-			{
+-				if (surface_format.format == VK_FORMAT_B8G8R8A8_UNORM)
+-				{
+-					format = VK_FORMAT_B8G8R8A8_UNORM;
+-					break;
+-				}
+-			}
+-		}
+-
+-		color_space = surfFormats[0].colorSpace;
+-
+-		return new swapchain_WSI(dev, present_queue_idx, graphics_queue_idx, transfer_queue_idx, format, m_surface, color_space, !surface_config.supports_automatic_wm_reports);
+-	}
+-}
++#include "stdafx.h"
++#include "instance.h"
++#ifdef RPCS3_PS5
++#include "ps5/qt/display_handoff.h"
++#endif
++
++namespace vk
++{
++	// Supported extensions
++	supported_extensions::supported_extensions(enumeration_class _class, const char* layer_name, VkPhysicalDevice pdev)
++	{
++		u32 count;
++#ifdef RPCS3_PS5
++		if (!rpcs3::ps5::initialize_vulkan()) return;
++#endif
++		if (_class == enumeration_class::instance)
++		{
++			if (vkEnumerateInstanceExtensionProperties(layer_name, &count, nullptr) != VK_SUCCESS)
++				return;
++		}
++		else
++		{
++			ensure(pdev);
++			if (vkEnumerateDeviceExtensionProperties(pdev, layer_name, &count, nullptr) != VK_SUCCESS)
++				return;
++		}
++
++		m_vk_exts.resize(count);
++		if (_class == enumeration_class::instance)
++		{
++			vkEnumerateInstanceExtensionProperties(layer_name, &count, m_vk_exts.data());
++		}
++		else
++		{
++			vkEnumerateDeviceExtensionProperties(pdev, layer_name, &count, m_vk_exts.data());
++		}
++	}
++
++	bool supported_extensions::is_supported(std::string_view ext) const
++	{
++		return std::any_of(m_vk_exts.cbegin(), m_vk_exts.cend(), [&](const VkExtensionProperties& p) { return p.extensionName == ext; });
++	}
++
++	// Instance
++	instance::~instance()
++	{
++		if (m_instance)
++		{
++			destroy();
++		}
++	}
++
++	void instance::destroy()
++	{
++		if (!m_instance) return;
++
++		if (m_debugger)
++		{
++			_vkDestroyDebugReportCallback(m_instance, m_debugger, nullptr);
++			m_debugger = nullptr;
++		}
++
++		if (m_surface)
++		{
++			vkDestroySurfaceKHR(m_instance, m_surface, nullptr);
++			m_surface = VK_NULL_HANDLE;
++		}
++
++		vkDestroyInstance(m_instance, nullptr);
++		m_instance = VK_NULL_HANDLE;
++#ifdef RPCS3_PS5
++		if (m_owns_ps5_display)
++		{
++			if (rpcs3::ps5::release_vulkan_display_to_qt()) m_owns_ps5_display = false;
++			else rsx_log.error("PS5 Vulkan could not safely return the display to Qt");
++		}
++#endif
++	}
++
++	void instance::enable_debugging()
++	{
++		if (!g_cfg.video.debug_output) return;
++
++		PFN_vkDebugReportCallbackEXT callback = vk::dbgFunc;
++
++		_vkCreateDebugReportCallback = reinterpret_cast<PFN_vkCreateDebugReportCallbackEXT>(vkGetInstanceProcAddr(m_instance, "vkCreateDebugReportCallbackEXT"));
++		_vkDestroyDebugReportCallback = reinterpret_cast<PFN_vkDestroyDebugReportCallbackEXT>(vkGetInstanceProcAddr(m_instance, "vkDestroyDebugReportCallbackEXT"));
++
++		VkDebugReportCallbackCreateInfoEXT dbgCreateInfo = {};
++		dbgCreateInfo.sType = VK_STRUCTURE_TYPE_DEBUG_REPORT_CREATE_INFO_EXT;
++		dbgCreateInfo.pfnCallback = callback;
++		dbgCreateInfo.flags = VK_DEBUG_REPORT_ERROR_BIT_EXT | VK_DEBUG_REPORT_WARNING_BIT_EXT;
++
++		CHECK_RESULT(_vkCreateDebugReportCallback(m_instance, &dbgCreateInfo, NULL, &m_debugger));
++	}
++
++#ifdef __clang__
++#pragma clang diagnostic push
++#pragma clang diagnostic ignored "-Wold-style-cast"
++#endif
++	bool instance::create(const char* app_name, bool fast)
++	{
++		// Initialize a vulkan instance
++#ifdef RPCS3_PS5
++		if (!rpcs3::ps5::initialize_vulkan())
++		{
++			rsx_log.error("The PS5 RADV loader has no required global entry points");
++			return false;
++		}
++#endif
++		VkApplicationInfo app = {};
++
++		app.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO;
++		app.pApplicationName = app_name;
++		app.applicationVersion = 0;
++		app.pEngineName = app_name;
++		app.engineVersion = 0;
++		app.apiVersion = VK_API_VERSION_1_2;
++
++		// Set up instance information
++
++		std::vector<const char*> extensions;
++		std::vector<const char*> layers;
++		const void* next_info = nullptr;
++
++#ifdef __APPLE__
++		// Declare MVK variables here to ensure the lifetime within the entire scope
++		const VkBool32 setting_true = VK_TRUE;
++		const int32_t setting_fast_math = g_cfg.video.disable_msl_fast_math.get() ? MVK_CONFIG_FAST_MATH_NEVER : MVK_CONFIG_FAST_MATH_ON_DEMAND;
++
++		std::vector<VkLayerSettingEXT> mvk_settings;
++		VkLayerSettingsCreateInfoEXT mvk_layer_settings_create_info{};
++#endif
++
++		if (!fast)
++		{
++			extensions_loaded = true;
++			supported_extensions support(supported_extensions::instance);
++
++			extensions.push_back(VK_KHR_SURFACE_EXTENSION_NAME);
++			if (support.is_supported(VK_EXT_DEBUG_REPORT_EXTENSION_NAME))
++			{
++				extensions.push_back(VK_EXT_DEBUG_REPORT_EXTENSION_NAME);
++			}
++
++#ifdef __APPLE__
++			extensions.push_back(VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME);
++			extensions.push_back(VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME);
++			if (support.is_supported(VK_EXT_LAYER_SETTINGS_EXTENSION_NAME))
++			{
++				extensions.push_back(VK_EXT_LAYER_SETTINGS_EXTENSION_NAME);
++
++				mvk_settings.push_back(VkLayerSettingEXT{ kMVKMoltenVKDriverLayerName, "MVK_CONFIG_RESUME_LOST_DEVICE", VK_LAYER_SETTING_TYPE_BOOL32_EXT, 1, &setting_true });
++				mvk_settings.push_back(VkLayerSettingEXT{ kMVKMoltenVKDriverLayerName, "MVK_CONFIG_FAST_MATH_ENABLED", VK_LAYER_SETTING_TYPE_INT32_EXT, 1, &setting_fast_math });
++
++				mvk_layer_settings_create_info.sType = VK_STRUCTURE_TYPE_LAYER_SETTINGS_CREATE_INFO_EXT;
++				mvk_layer_settings_create_info.pNext = next_info;
++				mvk_layer_settings_create_info.settingCount = static_cast<uint32_t>(mvk_settings.size());
++				mvk_layer_settings_create_info.pSettings = mvk_settings.data();
++
++				next_info = &mvk_layer_settings_create_info;
++			}
++#endif
++
++			if (support.is_supported(VK_KHR_GET_SURFACE_CAPABILITIES_2_EXTENSION_NAME))
++			{
++				extensions.push_back(VK_KHR_GET_SURFACE_CAPABILITIES_2_EXTENSION_NAME);
++			}
++
++			if (g_cfg.video.renderdoc_compatiblity && support.is_supported(VK_EXT_DEBUG_UTILS_EXTENSION_NAME))
++			{
++				extensions.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
++			}
++
++#ifdef _WIN32
++			extensions.push_back(VK_KHR_WIN32_SURFACE_EXTENSION_NAME);
++#elif defined(__APPLE__)
++			extensions.push_back(VK_EXT_METAL_SURFACE_EXTENSION_NAME);
++#elif defined(RPCS3_PS5)
++			if (!support.is_supported(VK_KHR_DISPLAY_EXTENSION_NAME))
++			{
++				rsx_log.error("The PS5 Vulkan driver does not expose VK_KHR_display");
++				return false;
++			}
++			extensions.push_back(VK_KHR_DISPLAY_EXTENSION_NAME);
++#else
++			bool found_surface_ext = false;
++#ifdef HAVE_X11
++			if (support.is_supported(VK_KHR_XLIB_SURFACE_EXTENSION_NAME))
++			{
++				extensions.push_back(VK_KHR_XLIB_SURFACE_EXTENSION_NAME);
++				found_surface_ext = true;
++			}
++#endif
++#ifdef HAVE_WAYLAND
++			if (support.is_supported(VK_KHR_WAYLAND_SURFACE_EXTENSION_NAME))
++			{
++				extensions.push_back(VK_KHR_WAYLAND_SURFACE_EXTENSION_NAME);
++				found_surface_ext = true;
++			}
++#endif //(WAYLAND)
++#ifdef ANDROID
++			if (support.is_supported(VK_KHR_ANDROID_SURFACE_EXTENSION_NAME))
++			{
++				extensions.push_back(VK_KHR_ANDROID_SURFACE_EXTENSION_NAME);
++				found_surface_ext = true;
++			}
++#endif
++			if (!found_surface_ext)
++			{
++				rsx_log.error("Could not find a supported Vulkan surface extension");
++				return 0;
++			}
++#endif //(WIN32, __APPLE__)
++			if (g_cfg.video.debug_output)
++				layers.push_back("VK_LAYER_KHRONOS_validation");
++		}
++#ifdef __APPLE__ 
++		// MoltenVK's ICD will not be detected without these extensions enabled.
++		else
++		{
++			extensions_loaded = true;
++			extensions.push_back(VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME);
++			extensions.push_back(VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME);
++		}
++#endif
++
++		VkInstanceCreateInfo instance_info = {};
++		instance_info.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
++		instance_info.pApplicationInfo = &app;
++		instance_info.enabledLayerCount = static_cast<u32>(layers.size());
++		instance_info.ppEnabledLayerNames = layers.data();
++#ifdef __APPLE__
++		instance_info.enabledExtensionCount = static_cast<u32>(extensions.size());
++		instance_info.ppEnabledExtensionNames = extensions.data();
++#else
++		instance_info.enabledExtensionCount = fast ? 0 : static_cast<u32>(extensions.size());
++		instance_info.ppEnabledExtensionNames = fast ? nullptr : extensions.data();
++#endif
++		instance_info.pNext = next_info;
++#ifdef __APPLE__
++		instance_info.flags |= VK_INSTANCE_CREATE_ENUMERATE_PORTABILITY_BIT_KHR;
++#endif
++
++		if (VkResult result = vkCreateInstance(&instance_info, nullptr, &m_instance); result != VK_SUCCESS)
++		{
++			if (result == VK_ERROR_LAYER_NOT_PRESENT)
++			{
++				rsx_log.fatal("Could not initialize layer VK_LAYER_KHRONOS_validation");
++			}
++
++			return false;
++		}
++
++#ifdef RPCS3_PS5
++		rpcs3::ps5::load_vulkan_instance(m_instance);
++#endif
++		return true;
++	}
++#ifdef __clang__
++#pragma clang diagnostic pop
++#endif
++	void instance::bind()
++	{
++		// Register some global states
++		if (m_debugger)
++		{
++			_vkDestroyDebugReportCallback(m_instance, m_debugger, nullptr);
++			m_debugger = nullptr;
++		}
++
++		enable_debugging();
++	}
++
++	std::vector<physical_device>& instance::enumerate_devices()
++	{
++		u32 num_gpus;
++		// This may fail on unsupported drivers, so just assume no devices
++		if (vkEnumeratePhysicalDevices(m_instance, &num_gpus, nullptr) != VK_SUCCESS)
++			return gpus;
++
++		if (gpus.size() != num_gpus)
++		{
++			std::vector<VkPhysicalDevice> pdevs(num_gpus);
++			gpus.resize(num_gpus);
++
++			CHECK_RESULT(vkEnumeratePhysicalDevices(m_instance, &num_gpus, pdevs.data()));
++
++			for (u32 i = 0; i < num_gpus; ++i)
++				gpus[i].create(m_instance, pdevs[i], extensions_loaded);
++		}
++
++		return gpus;
++	}
++
++	swapchain_base* instance::create_swapchain(display_handle_t window_handle, vk::physical_device& dev)
++	{
++		WSI_config surface_config
++		{
++			.supports_automatic_wm_reports = true
++		};
++#ifdef RPCS3_PS5
++		if (!m_owns_ps5_display)
++		{
++			if (!rpcs3::ps5::acquire_qt_display_for_vulkan())
++			{
++				rsx_log.error("PS5 Qt could not release the display to Vulkan");
++				return nullptr;
++			}
++			m_owns_ps5_display = true;
++		}
++		m_surface = make_WSI_surface(m_instance, dev, window_handle, &surface_config);
++#else
++		m_surface = make_WSI_surface(m_instance, window_handle, &surface_config);
++#endif
++
++		u32 device_queues = dev.get_queue_count();
++		std::vector<VkBool32> supports_present(device_queues, VK_FALSE);
++		bool present_possible = true;
++
++		for (u32 index = 0; index < device_queues; index++)
++		{
++			vkGetPhysicalDeviceSurfaceSupportKHR(dev, index, m_surface, &supports_present[index]);
++		}
++
++		u32 graphics_queue_idx = -1;
++		u32 present_queue_idx = -1;
++		u32 transfer_queue_idx = -1;
++
++		auto test_queue_family = [&](u32 index, u32 desired_flags)
++			{
++				if (const auto flags = dev.get_queue_properties(index).queueFlags;
++					(flags & desired_flags) == desired_flags)
++				{
++					return true;
++				}
++
++				return false;
++			};
++
++		for (u32 i = 0; i < device_queues; ++i)
++		{
++			// 1. Test for a present queue possibly one that also supports present
++			if (present_queue_idx == umax && supports_present[i])
++			{
++				present_queue_idx = i;
++				if (test_queue_family(i, VK_QUEUE_GRAPHICS_BIT | VK_QUEUE_COMPUTE_BIT))
++				{
++					graphics_queue_idx = i;
++				}
++			}
++			// 2. Check for graphics support
++			else if (graphics_queue_idx == umax && test_queue_family(i, VK_QUEUE_GRAPHICS_BIT | VK_QUEUE_COMPUTE_BIT))
++			{
++				graphics_queue_idx = i;
++				if (supports_present[i])
++				{
++					present_queue_idx = i;
++				}
++			}
++			// 3. Check if transfer + compute is available
++			else if (transfer_queue_idx == umax && test_queue_family(i, VK_QUEUE_COMPUTE_BIT | VK_QUEUE_TRANSFER_BIT))
++			{
++				transfer_queue_idx = i;
++			}
++		}
++
++		if (graphics_queue_idx == umax)
++		{
++			rsx_log.fatal("Failed to find a suitable graphics queue");
++			return nullptr;
++		}
++
++		if (graphics_queue_idx != present_queue_idx)
++		{
++			// Separate graphics and present, use headless fallback
++			present_possible = false;
++		}
++
++		if (!present_possible)
++		{
++#ifdef RPCS3_PS5
++			rsx_log.error("The PS5 Vulkan device has no compatible presentation queue");
++			return nullptr;
++#else
++			//Native(sw) swapchain
++			rsx_log.error("It is not possible for the currently selected GPU to present to the window (Likely caused by NVIDIA driver running the current display)");
++			rsx_log.warning("Falling back to software present support (native windowing API)");
++			auto swapchain = new swapchain_NATIVE(dev, -1, graphics_queue_idx, transfer_queue_idx);
++			swapchain->create(window_handle);
++			return swapchain;
++#endif
++		}
++
++		// Get the list of VkFormat's that are supported:
++		u32 formatCount;
++		CHECK_RESULT(vkGetPhysicalDeviceSurfaceFormatsKHR(dev, m_surface, &formatCount, nullptr));
++
++		std::vector<VkSurfaceFormatKHR> surfFormats(formatCount);
++		CHECK_RESULT(vkGetPhysicalDeviceSurfaceFormatsKHR(dev, m_surface, &formatCount, surfFormats.data()));
++
++		VkFormat format;
++		VkColorSpaceKHR color_space;
++
++		if (formatCount == 1 && surfFormats[0].format == VK_FORMAT_UNDEFINED)
++		{
++			format = VK_FORMAT_B8G8R8A8_UNORM;
++		}
++		else
++		{
++			if (!formatCount) fmt::throw_exception("Format count is zero!");
++			format = surfFormats[0].format;
++
++			//Prefer BGRA8_UNORM to avoid sRGB compression (RADV)
++			for (auto& surface_format : surfFormats)
++			{
++				if (surface_format.format == VK_FORMAT_B8G8R8A8_UNORM)
++				{
++					format = VK_FORMAT_B8G8R8A8_UNORM;
++					break;
++				}
++			}
++		}
++
++		color_space = surfFormats[0].colorSpace;
++
++		return new swapchain_WSI(dev, present_queue_idx, graphics_queue_idx, transfer_queue_idx, format, m_surface, color_space, !surface_config.supports_automatic_wm_reports);
++	}
++}
+--- a/rpcs3/Emu/RSX/VK/vkutils/instance.h
++++ b/rpcs3/Emu/RSX/VK/vkutils/instance.h
+@@ -1,64 +1,67 @@
+-#pragma once
+-
+-#include "../VulkanAPI.h"
+-#include "swapchain.h"
+-
+-#include <algorithm>
+-#include <vector>
+-
+-#ifdef __APPLE__
+-#include <MoltenVK/mvk_vulkan.h>
+-#include <MoltenVK/mvk_private_api.h>
+-#endif
+-
+-namespace vk
+-{
+-	class supported_extensions
+-	{
+-	private:
+-		std::vector<VkExtensionProperties> m_vk_exts;
+-
+-	public:
+-		enum enumeration_class
+-		{
+-			instance = 0,
+-			device   = 1
+-		};
+-
+-		supported_extensions(enumeration_class _class, const char* layer_name = nullptr, VkPhysicalDevice pdev = VK_NULL_HANDLE);
+-
+-		bool is_supported(std::string_view ext) const;
+-	};
+-
+-	class instance
+-	{
+-	private:
+-		std::vector<physical_device> gpus;
+-		VkInstance m_instance = VK_NULL_HANDLE;
+-		VkSurfaceKHR m_surface = VK_NULL_HANDLE;
+-
+-		PFN_vkDestroyDebugReportCallbackEXT _vkDestroyDebugReportCallback = nullptr;
+-		PFN_vkCreateDebugReportCallbackEXT _vkCreateDebugReportCallback = nullptr;
+-		VkDebugReportCallbackEXT m_debugger = nullptr;
+-
+-		bool extensions_loaded = false;
+-
+-	public:
+-
+-		instance() = default;
+-
+-		~instance();
+-
+-		void destroy();
+-
+-		void enable_debugging();
+-
+-		bool create(const char* app_name, bool fast = false);
+-
+-		void bind();
+-
+-		std::vector<physical_device>& enumerate_devices();
+-
+-		swapchain_base* create_swapchain(display_handle_t window_handle, vk::physical_device& dev);
+-	};
+-}
++#pragma once
++
++#include "../VulkanAPI.h"
++#include "swapchain.h"
++
++#include <algorithm>
++#include <vector>
++
++#ifdef __APPLE__
++#include <MoltenVK/mvk_vulkan.h>
++#include <MoltenVK/mvk_private_api.h>
++#endif
++
++namespace vk
++{
++	class supported_extensions
++	{
++	private:
++		std::vector<VkExtensionProperties> m_vk_exts;
++
++	public:
++		enum enumeration_class
++		{
++			instance = 0,
++			device   = 1
++		};
++
++		supported_extensions(enumeration_class _class, const char* layer_name = nullptr, VkPhysicalDevice pdev = VK_NULL_HANDLE);
++
++		bool is_supported(std::string_view ext) const;
++	};
++
++	class instance
++	{
++	private:
++		std::vector<physical_device> gpus;
++		VkInstance m_instance = VK_NULL_HANDLE;
++		VkSurfaceKHR m_surface = VK_NULL_HANDLE;
++#ifdef RPCS3_PS5
++		bool m_owns_ps5_display = false;
++#endif
++
++		PFN_vkDestroyDebugReportCallbackEXT _vkDestroyDebugReportCallback = nullptr;
++		PFN_vkCreateDebugReportCallbackEXT _vkCreateDebugReportCallback = nullptr;
++		VkDebugReportCallbackEXT m_debugger = nullptr;
++
++		bool extensions_loaded = false;
++
++	public:
++
++		instance() = default;
++
++		~instance();
++
++		void destroy();
++
++		void enable_debugging();
++
++		bool create(const char* app_name, bool fast = false);
++
++		void bind();
++
++		std::vector<physical_device>& enumerate_devices();
++
++		swapchain_base* create_swapchain(display_handle_t window_handle, vk::physical_device& dev);
++	};
++}
+--- a/rpcs3/Emu/RSX/VK/vkutils/swapchain.h
++++ b/rpcs3/Emu/RSX/VK/vkutils/swapchain.h
+@@ -1,6 +1,8 @@
+ #pragma once
+ 
+-#if defined (_WIN32)
++#if defined(RPCS3_PS5)
++#include "swapchain_ps5.hpp"
++#elif defined (_WIN32)
+ #include "swapchain_win32.hpp"
+ #elif defined (ANDROID)
+ #include "swapchain_android.hpp"
+--- a/rpcs3/Emu/RSX/display.h
++++ b/rpcs3/Emu/RSX/display.h
+@@ -17,8 +17,8 @@
+ 
+ #ifdef _WIN32
+ using display_handle_t = HWND;
+-#elif defined(__APPLE__)
+-using display_handle_t = void*; // NSView
++#elif defined(__APPLE__) || defined(RPCS3_PS5)
++using display_handle_t = void*; // Native view or opaque PS5 window
+ #else
+ #include <variant>
+ using display_handle_t = std::variant<
+--- a/rpcs3/Emu/system_config.h
++++ b/rpcs3/Emu/system_config.h
+@@ -249,7 +249,11 @@
+ 	{
+ 		node_audio(cfg::node* _this) : cfg::node(_this, "Audio") {}
+ 
++#ifdef RPCS3_PS5
++        cfg::_enum<audio_renderer> renderer{ this, "Renderer", audio_renderer::sceaudio, true };
++#else
+ 		cfg::_enum<audio_renderer> renderer{ this, "Renderer", audio_renderer::cubeb, true };
++#endif
+ 		cfg::_enum<audio_provider> provider{ this, "Audio Provider", audio_provider::cell_audio, false };
+ 		cfg::_enum<audio_avport> rsxaudio_port{ this, "RSXAudio Avport", audio_avport::hdmi_0, true };
+ 		cfg::_bool dump_to_file{ this, "Dump to file", false, true };
+--- a/rpcs3/Emu/system_config_types.cpp
++++ b/rpcs3/Emu/system_config_types.cpp
+@@ -129,7 +129,11 @@
+ #ifdef _WIN32
+ 		case audio_renderer::xaudio: return "XAudio2";
+ #endif
++#ifdef RPCS3_PS5
++		case audio_renderer::sceaudio: return "SceAudioOut";
++#else
+ 		case audio_renderer::cubeb: return "Cubeb";
++#endif
+ #ifdef HAVE_FAUDIO
+ 		case audio_renderer::faudio: return "FAudio";
+ #endif
+--- a/rpcs3/Emu/system_config_types.h
++++ b/rpcs3/Emu/system_config_types.h
+@@ -54,7 +54,11 @@
+ #ifdef _WIN32
+ 	xaudio,
+ #endif
++#ifdef RPCS3_PS5
++	sceaudio,
++#else
+ 	cubeb,
++#endif
+ #ifdef HAVE_FAUDIO
+ 	faudio,
+ #endif
+--- a/rpcs3/Input/pad_thread.cpp
++++ b/rpcs3/Input/pad_thread.cpp
+@@ -17,6 +17,9 @@
+ #endif
+ #ifndef ANDROID
+ #include "keyboard_pad_handler.h"
++#ifdef RPCS3_PS5
++#include "ps5/input/ps5_pad_handler.h"
++#endif
+ #endif
+ #include "Emu/Io/Null/NullPadHandler.h"
+ #include "Emu/Io/interception.h"
+@@ -861,6 +864,10 @@
+ 		return std::make_shared<NullPadHandler>();
+ #else
+ 		return std::make_shared<keyboard_pad_handler>();
++#endif
++#ifdef RPCS3_PS5
++	case pad_handler::scepad:
++		return std::make_shared<ps5_pad_handler>();
+ #endif
+ 	case pad_handler::ds3:
+ 		return std::make_shared<ds3_pad_handler>();
+--- a/rpcs3/main.cpp
++++ b/rpcs3/main.cpp
+@@ -1,11 +1,19 @@
+-#include "stdafx.h"
+-#include "rpcs3.h"
+-
+-LOG_CHANNEL(sys_log, "SYS");
+-
+-int main(int argc, char** argv)
+-{
+-	const int exit_code = run_rpcs3(argc, argv);
+-	sys_log.notice("RPCS3 terminated with exit code %d", exit_code);
+-	return exit_code;
+-}
++#include "stdafx.h"
++#include "rpcs3.h"
++
++LOG_CHANNEL(sys_log, "SYS");
++
++#ifdef RPCS3_PS5
++namespace rpcs3::ps5 { void initialize_qt_platform(); void initialize_core_paths(); }
++#endif
++
++int main(int argc, char** argv)
++{
++#ifdef RPCS3_PS5
++	rpcs3::ps5::initialize_qt_platform();
++	rpcs3::ps5::initialize_core_paths();
++#endif
++	const int exit_code = run_rpcs3(argc, argv);
++	sys_log.notice("RPCS3 terminated with exit code %d", exit_code);
++	return exit_code;
++}
+--- a/rpcs3/main_application.cpp
++++ b/rpcs3/main_application.cpp
+@@ -27,8 +27,13 @@
+ #include "Emu/Audio/AudioBackend.h"
+ #include "Emu/Audio/Null/NullAudioBackend.h"
+ #include "Emu/Audio/Null/null_enumerator.h"
++#ifdef RPCS3_PS5
++#include "ps5/audio/ps5_audio_backend.h"
++#include "ps5/audio/ps5_audio_enumerator.h"
++#else
+ #include "Emu/Audio/Cubeb/CubebBackend.h"
+ #include "Emu/Audio/Cubeb/cubeb_enumerator.h"
++#endif
+ #ifdef _WIN32
+ #include "Emu/Audio/XAudio2/XAudio2Backend.h"
+ #include "Emu/Audio/XAudio2/xaudio2_enumerator.h"
+@@ -228,7 +233,11 @@
+ #ifdef _WIN32
+ 		case audio_renderer::xaudio: result = std::make_shared<XAudio2Backend>(); break;
+ #endif
++#ifdef RPCS3_PS5
++		case audio_renderer::sceaudio: result = std::make_shared<ps5_audio_backend>(); break;
++#else
+ 		case audio_renderer::cubeb: result = std::make_shared<CubebBackend>(); break;
++#endif
+ #ifdef HAVE_FAUDIO
+ 		case audio_renderer::faudio: result = std::make_shared<FAudioBackend>(); break;
+ #endif
+@@ -251,7 +260,11 @@
+ #ifdef _WIN32
+ 		case audio_renderer::xaudio: return std::make_shared<xaudio2_enumerator>();
+ #endif
++#ifdef RPCS3_PS5
++		case audio_renderer::sceaudio: return std::make_shared<ps5_audio_enumerator>();
++#else
+ 		case audio_renderer::cubeb: return std::make_shared<cubeb_enumerator>();
++#endif
+ #ifdef HAVE_FAUDIO
+ 		case audio_renderer::faudio: return std::make_shared<faudio_enumerator>();
+ #endif
+--- a/rpcs3/rpcs3qt/config_database.cpp
++++ b/rpcs3/rpcs3qt/config_database.cpp
+@@ -3,6 +3,7 @@
+ #include "gui_settings.h"
+ #include "downloader.h"
+ #include "Emu/system_config.h"
++#include <QJsonDocument>
+ 
+ LOG_CHANNEL(gui_log, "GUI");
+ 
+--- a/rpcs3/rpcs3qt/emu_settings.cpp
++++ b/rpcs3/rpcs3qt/emu_settings.cpp
+@@ -1127,7 +1127,11 @@
+ #ifdef _WIN32
+ 		case audio_renderer::xaudio: return tr("XAudio2", "Audio renderer");
+ #endif
++#ifdef RPCS3_PS5
++		case audio_renderer::sceaudio: return tr("PS5 AudioOut", "Audio renderer");
++#else
+ 		case audio_renderer::cubeb: return tr("Cubeb", "Audio renderer");
++#endif
+ #ifdef HAVE_FAUDIO
+ 		case audio_renderer::faudio: return tr("FAudio", "Audio renderer");
+ #endif
+--- a/rpcs3/rpcs3qt/game_list_actions.cpp
++++ b/rpcs3/rpcs3qt/game_list_actions.cpp
+@@ -552,7 +552,7 @@
+ 				0;
+ 
+ 			pdlg->setValue(progress);
+-			pdlg->setLabelText(tr("Calculating hash: %0").arg(m_game_validator->get_name()));
++			pdlg->setLabelText(tr("Calculating hash: %0").arg(QString::fromStdString(m_game_validator->get_name())));
+ 		}
+ 		else
+ 		{
+--- a/rpcs3/rpcs3qt/game_list_frame.h
++++ b/rpcs3/rpcs3qt/game_list_frame.h
+@@ -19,6 +19,7 @@
+ #include <memory>
+ #include <optional>
+ #include <set>
++#include <unordered_set>
+ 
+ class config_database;
+ class game_list_table;
+--- a/rpcs3/rpcs3qt/gs_frame.cpp
++++ b/rpcs3/rpcs3qt/gs_frame.cpp
+@@ -87,8 +87,8 @@
+ 		setIcon(appIcon);
+ 	}
+ 
+-#ifdef __APPLE__
+-	// Needed for MoltenVK to work properly on MacOS
++#if defined(__APPLE__) || defined(RPCS3_PS5)
++	// Native Vulkan window role (MoltenVK / PS5 display and input ownership).
+ 	if (g_cfg.video.renderer == video_renderer::vulkan)
+ 		setSurfaceType(QSurface::VulkanSurface);
+ #endif
+@@ -733,8 +733,8 @@
+ {
+ #ifdef _WIN32
+ 	return reinterpret_cast<HWND>(this->winId());
+-#elif defined(__APPLE__)
+-	return reinterpret_cast<void*>(this->winId()); //NSView
++#elif defined(__APPLE__) || defined(RPCS3_PS5)
++	return reinterpret_cast<void*>(this->winId()); // Native window
+ #else
+ #ifdef HAVE_WAYLAND
+ 	QPlatformNativeInterface *native = QGuiApplication::platformNativeInterface();
+--- a/rpcs3/rpcs3qt/microphone_creator.cpp
++++ b/rpcs3/rpcs3qt/microphone_creator.cpp
+@@ -24,6 +24,7 @@
+ 	m_microphone_list.clear();
+ 	m_microphone_list.append(get_none());
+ 
++#ifndef WITHOUT_OPENAL
+ 	if (alcIsExtensionPresent(nullptr, "ALC_ENUMERATION_EXT") == AL_TRUE)
+ 	{
+ 		if (const char* devices = alcGetString(nullptr, ALC_CAPTURE_DEVICE_SPECIFIER))
+@@ -47,6 +48,7 @@
+ 			m_microphone_list.append(device);
+ 		}
+ 	}
++#endif // WITHOUT_OPENAL
+ }
+ 
+ const QStringList& microphone_creator::get_microphone_list() const
+--- a/rpcs3/rpcs3qt/pad_settings_dialog.cpp
++++ b/rpcs3/rpcs3qt/pad_settings_dialog.cpp
+@@ -1577,6 +1577,9 @@
+ 		else
+ 			m_description = tooltips.gamepad_settings.null;
+ 		break;
++#ifdef RPCS3_PS5
++    case pad_handler::scepad: m_description = tr("DualSense tramite il servizio controller PS5. Pulsanti, stick, vibrazione e LED."); break;
++#endif
+ 	case pad_handler::keyboard: m_description = tooltips.gamepad_settings.keyboard; break;
+ 	case pad_handler::skateboard: m_description = tooltips.gamepad_settings.skateboard; break;
+ 	case pad_handler::move: m_description = tooltips.gamepad_settings.move; break;
+@@ -2277,6 +2280,9 @@
+ 	{
+ 		case pad_handler::null: return tr("Null");
+ 		case pad_handler::keyboard: return tr("Keyboard");
++#ifdef RPCS3_PS5
++        case pad_handler::scepad: return tr("PS5 ScePad");
++#endif
+ 		case pad_handler::ds3: return tr("DualShock 3");
+ 		case pad_handler::ds4: return tr("DualShock 4");
+ 		case pad_handler::dualsense: return tr("DualSense");
+@@ -2302,6 +2308,9 @@
+ 	{
+ 		case pad_handler::null: return tr("Default Null Device");
+ 		case pad_handler::keyboard: return tr("Keyboard");
++#ifdef RPCS3_PS5
++        case pad_handler::scepad: return original;
++#endif
+ 		case pad_handler::ds3: return tr("DS3 Pad #%0").arg(index);
+ 		case pad_handler::ds4: return tr("DS4 Pad #%0").arg(index);
+ 		case pad_handler::dualsense: return tr("DualSense Pad #%0").arg(index);
+--- a/rpcs3/util/atomic.cpp
++++ b/rpcs3/util/atomic.cpp
+@@ -185,23 +185,28 @@
+ 		un_t<std::mutex> mtx;
+ #endif
+ 
+-		void init(uptr iptr)
++		static u64 current_tid()
+ 		{
+ #ifdef _WIN32
+-			tid = GetCurrentThreadId();
++			return GetCurrentThreadId();
+ #elif defined(ANDROID)
+-			tid = pthread_gettid_np(pthread_self());
++			return pthread_gettid_np(pthread_self());
+ #elif defined(__linux__)
+-			tid = syscall(SYS_gettid);
++			return syscall(SYS_gettid);
+ #elif defined(__APPLE__)
+ 			u64 tid_temp{};
+ 			pthread_threadid_np(nullptr, &tid_temp);
+-			tid = tid_temp; // Use a temporary for extra safety
++			return tid_temp; // Use a temporary for extra safety
+ #elif defined(__FreeBSD__)
+-			tid = pthread_getthreadid_np();
++			return pthread_getthreadid_np();
+ #else
+-			tid = pthread_self();
+-#endif
++			return reinterpret_cast<u64>(pthread_self());
++#endif
++		}
++
++		void init(uptr iptr)
++		{
++			tid = current_tid();
+ 
+ #ifdef USE_STD
+ 			cv.init(cv);
+@@ -292,6 +297,15 @@
+ 			// Use "wake all" arg for robustness, only 1 thread is expected
+ 			futex(&sync, FUTEX_WAKE_PRIVATE, 0x7fff'ffff);
+ #elif defined(USE_STD)
++			// The waiter holds mtx while it re-checks its condition, and that check can notify
++			// its own slot: it is awake then, so skip the lock (an error-checking mutex, as on
++			// the PS5, throws on a recursive lock; elsewhere it would deadlock)
++			if (tid == current_tid())
++			{
++				cv->notify_all();
++				return;
++			}
++
+ 			// Not super efficient: locking is required to avoid lost notifications
+ 			mtx->lock();
+ 			mtx->unlock();
+--- a/rpcs3/util/vm.hpp
++++ b/rpcs3/util/vm.hpp
+@@ -74,6 +74,10 @@
+ #else
+ 		int m_file{};
+ #endif
++#ifdef __PROSPERO__
++		// One direct-memory allocation, mapped at any number of addresses (ps5platform/shm.h)
++		s64 m_direct_start = -1;
++#endif
+ 		u32 m_flags{};
+ 		u64 m_size{};
+ 		atomic_t<void*> m_ptr{nullptr};
+--- a/rpcs3/util/vm_native.cpp
++++ b/rpcs3/util/vm_native.cpp
+@@ -46,6 +46,11 @@
+ # endif
+ #endif
+ 
++#ifdef __PROSPERO__
++#include <ps5platform/kernel.h>
++#include <ps5platform/shm.h>
++#endif
++
+ namespace utils
+ {
+ #ifdef MAP_NORESERVE
+@@ -180,6 +185,9 @@
+ 
+ 	long get_page_size()
+ 	{
++#ifdef __PROSPERO__
++		return static_cast<long>(PS5_KERNEL_PAGE_SIZE);
++#endif
+ 		static const long r = []() -> long
+ 		{
+ #ifdef _WIN32
+@@ -237,6 +245,52 @@
+ 		}
+ 
+ 		return ::VirtualAlloc(use_addr, size, MEM_RESERVE, PAGE_NOACCESS);
++#elif defined(__PROSPERO__)
++		// Plain mmap is refused in a title, and anonymous mappings would draw on the small flexible
++		// budget: reserve address space with the platform layer (never inside the GPU window).
++		// Committed memory is direct memory, see memory_commit.
++		if (use_addr && reinterpret_cast<uptr>(use_addr) % 0x10000)
++		{
++			return nullptr;
++		}
++
++		size = utils::align(size, 0x10000);
++
++		if (use_addr)
++		{
++			return ps5_vrange_reserve_at(use_addr, size) == 0 ? use_addr : nullptr;
++		}
++
++		// No address asked for: the low ranges are small (first fit there runs out after a few
++		// JIT memory managers, which RPCS3 never releases), so place it in the large range above
++		// guest memory (0x10'0000'0000+), bumping a hint. 16 GiB fit at a hint up to 512 GiB.
++		static atomic_t<u64> s_next_hint = 0x40'0000'0000;
++
++		for (u32 attempt = 0; attempt < 64; attempt++)
++		{
++			const u64 step = utils::align<u64>(size, 0x1000'0000);
++			const u64 hint = s_next_hint.fetch_add(step);
++
++			if (hint + size > 0xFF'0000'0000)
++			{
++				s_next_hint.compare_and_swap(hint + step, 0x40'0000'0000);
++				continue;
++			}
++
++			void* base = nullptr;
++			if (ps5_vrange_reserve(size, reinterpret_cast<void*>(hint), 0x10000, &base) == 0)
++			{
++				return base;
++			}
++		}
++
++		void* base = nullptr;
++		if (const int rc = ps5_vrange_reserve(size, nullptr, 0x10000, &base); rc != 0)
++		{
++			std::fprintf(stderr, "memory_reserve(0x%zx) failed: 0x%x\n", size, static_cast<u32>(rc));
++			return nullptr;
++		}
++		return base;
+ #else
+ 		if (use_addr && reinterpret_cast<uptr>(use_addr) % 0x10000)
+ 		{
+@@ -320,6 +374,11 @@
+ 
+ #ifdef _WIN32
+ 		ensure(::VirtualAlloc(pointer, size, MEM_COMMIT, +prot));
++#elif defined(__PROSPERO__)
++		if (const int rc = ps5_vrange_commit(pointer, size, +prot); rc != 0)
++		{
++			fmt::throw_exception("ps5_vrange_commit(%p, 0x%x, %d) failed: 0x%x", pointer, size, +prot, static_cast<u32>(rc));
++		}
+ #else
+ 		const u64 ptr64 = reinterpret_cast<u64>(pointer);
+ 		ensure(::mprotect(reinterpret_cast<void*>(ptr64 & -get_page_size()), size + (ptr64 & (get_page_size() - 1)), +prot) != -1);
+@@ -344,6 +403,8 @@
+ 
+ #ifdef _WIN32
+ 		ensure(::VirtualFree(pointer, size, MEM_DECOMMIT));
++#elif defined(__PROSPERO__)
++		ensure(ps5_vrange_decommit(pointer, size) == 0, "ps5_vrange_decommit failed");
+ #else
+ 		const u64 ptr64 = reinterpret_cast<u64>(pointer);
+ #if defined(__APPLE__) && defined(ARCH_ARM64)
+@@ -378,6 +439,12 @@
+ #ifdef _WIN32
+ 		memory_decommit(pointer, size);
+ 		memory_commit(pointer, size, prot);
++#elif defined(__PROSPERO__)
++		ensure(ps5_vrange_decommit(pointer, size) == 0, "ps5_vrange_decommit failed");
++		if (const int rc = ps5_vrange_commit(pointer, size, +prot); rc != 0)
++		{
++			fmt::throw_exception("ps5_vrange_commit(%p, 0x%x, %d) failed: 0x%x", pointer, size, +prot, static_cast<u32>(rc));
++		}
+ #else
+ 		const u64 ptr64 = reinterpret_cast<u64>(pointer);
+ #if defined(__APPLE__) && defined(ARCH_ARM64)
+@@ -416,6 +483,8 @@
+ #ifdef _WIN32
+ 		unmap_mappping_memory(reinterpret_cast<u64>(pointer), size);
+ 		ensure(::VirtualFree(pointer, 0, MEM_RELEASE));
++#elif defined(__PROSPERO__)
++		ensure(ps5_vrange_release(pointer, size) == 0, "ps5_vrange_release failed");
+ #else
+ 		ensure(::munmap(pointer, size) != -1);
+ #endif
+@@ -428,6 +497,14 @@
+ 			return;
+ 		}
+ 
++#ifdef __PROSPERO__
++		{
++			const u64 addr64 = reinterpret_cast<u64>(pointer);
++			const u64 page = PS5_KERNEL_PAGE_SIZE;
++			ensure(::sceKernelMprotect(reinterpret_cast<void*>(addr64 & -page), size + (addr64 & (page - 1)), +prot) == 0, "sceKernelMprotect failed");
++			return;
++		}
++#endif
+ #ifdef _WIN32
+ 
+ 		DWORD old;
+@@ -462,6 +539,9 @@
+ 			return true;
+ 		}
+ 
++#ifdef __PROSPERO__
++		return true;
++#endif
+ #ifdef _WIN32
+ 		return ::VirtualLock(pointer, size);
+ #else
+@@ -471,6 +551,9 @@
+ 
+ 	void* memory_map_fd([[maybe_unused]] native_handle fd, [[maybe_unused]] usz size, [[maybe_unused]] protection prot)
+ 	{
++#ifdef __PROSPERO__
++		return nullptr;
++#endif
+ #ifdef _WIN32
+ 		// TODO
+ 		return nullptr;
+@@ -490,6 +573,15 @@
+ 		: m_flags(flags)
+ 		, m_size(utils::align(size, 0x10000))
+ 	{
++#ifdef __PROSPERO__
++		// Guest memory is one direct-memory object; views are mapped with ps5_shm_map
++		ps5_shm obj{};
++		ensure(::ps5_shm_create(m_size, &obj) == 0, "ps5_shm_create failed");
++		m_direct_start = obj.direct_start;
++		m_size = obj.bytes;
++		m_file = -1;
++		return;
++#endif
+ #ifdef _WIN32
+ 		const ULARGE_INTEGER max_size{ .QuadPart = m_size };
+ 		m_handle = ensure(::CreateFileMappingW(INVALID_HANDLE_VALUE, nullptr, PAGE_EXECUTE_READWRITE, max_size.HighPart, max_size.LowPart, nullptr));
+@@ -533,6 +625,15 @@
+ 	shm::shm(u64 size, const std::string& storage)
+ 		: m_size(utils::align(size, 0x10000))
+ 	{
++#ifdef __PROSPERO__
++		// No sparse file storage on the PS5: guest memory is one direct-memory object; views are mapped with ps5_shm_map
++		ps5_shm obj{};
++		ensure(::ps5_shm_create(m_size, &obj) == 0, "ps5_shm_create failed");
++		m_direct_start = obj.direct_start;
++		m_size = obj.bytes;
++		m_file = -1;
++		return;
++#endif
+ #ifdef _WIN32
+ 		fs::file f;
+ 
+@@ -807,6 +908,12 @@
+ 
+ #ifdef _WIN32
+ 		::CloseHandle(m_handle);
++#elif defined(__PROSPERO__)
++		if (m_direct_start >= 0)
++		{
++			ps5_shm obj{m_direct_start, m_size};
++			::ps5_shm_destroy(&obj);
++		}
+ #else
+ 		::close(m_file);
+ #endif
+@@ -817,6 +924,33 @@
+ 
+ 	u8* shm::map(void* ptr, protection prot, bool cow) const
+ 	{
++#ifdef __PROSPERO__
++		// Copy-on-write views have no direct-memory form (only the 32 GiB hook area asked for one)
++		if (cow)
++		{
++			return nullptr;
++		}
++
++		{
++			const ps5_shm obj{m_direct_start, m_size};
++			const u64 at = reinterpret_cast<u64>(ptr) & -0x10000;
++			const int view_prot = +prot & (PS5_SHM_READ | PS5_SHM_WRITE);
++			void* view = nullptr;
++
++			// Execute at map time is refused: map without it, then change the protection
++			if (::ps5_shm_map(&obj, 0, m_size, reinterpret_cast<void*>(at), view_prot ? view_prot : PS5_SHM_READ, at ? PS5_SHM_FIXED : 0u, &view) != 0)
++			{
++				return nullptr;
++			}
++
++			if ((+prot & PS5_SHM_EXEC) || !view_prot)
++			{
++				ensure(::sceKernelMprotect(view, m_size, +prot) == 0, "sceKernelMprotect failed");
++			}
++
++			return static_cast<u8*>(view);
++		}
++#endif
+ #ifdef _WIN32
+ 		DWORD access = FILE_MAP_WRITE;
+ 		switch (prot)
+@@ -886,6 +1020,25 @@
+ 
+ 	u8* shm::try_map(void* ptr, protection prot, bool cow) const
+ 	{
++#ifdef __PROSPERO__
++		{
++			const auto at = reinterpret_cast<u8*>(reinterpret_cast<u64>(ptr) & -0x10000);
++
++			if (!at || cow || ::ps5_vrange_reserve_at(at, m_size) != 0)
++			{
++				return nullptr;
++			}
++
++			// Reserved just now: a fixed view replaces the reservation
++			if (auto result = this->map(at, prot, cow))
++			{
++				return result;
++			}
++
++			::ps5_vrange_release(at, m_size);
++			return nullptr;
++		}
++#endif
+ 		// Non-null pointer shall be specified
+ 		const auto target = ensure(reinterpret_cast<u8*>(reinterpret_cast<u64>(ptr) & -0x10000));
+ 
+@@ -1023,6 +1176,8 @@
+ 	{
+ #ifdef _WIN32
+ 		::UnmapViewOfFile(ptr);
++#elif defined(__PROSPERO__)
++		::ps5_shm_unmap(ptr, m_size, 0);
+ #else
+ 		::munmap(ptr, m_size);
+ #endif
+@@ -1077,6 +1232,9 @@
+ 		{
+ 			return;
+ 		}
++#elif defined(__PROSPERO__)
++		// Give the view back as part of the surrounding reservation
++		ensure(::ps5_shm_unmap(target, m_size, PS5_SHM_KEEP_RESERVED) == 0, "ps5_shm_unmap failed");
+ #else
+ 		// This method is faster but leaves mapped remnants of the shm (until overwritten)
+ 		ensure(::mprotect(target, m_size, PROT_NONE) != -1);

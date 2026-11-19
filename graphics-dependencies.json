@@ -1,0 +1,27 @@
+[
+  {
+    "name": "PS5_Vulkan",
+    "url": "https://github.com/mihawk-99/PS5_Vulkan.git",
+    "revision": "ace98a99460c95a8d2821a9e33935c7b71070f7f"
+  },
+  {
+    "name": "PS5_Mesa",
+    "url": "https://github.com/mihawk-99/PS5_Mesa.git",
+    "revision": "1ba9874f478657ccf6da72ce55f0260164cc0bd0"
+  },
+  {
+    "name": "PS5_PayloadSDK",
+    "url": "https://github.com/mihawk-99/PS5_PayloadSDK.git",
+    "revision": "b83202be73e930050e00de0f1b4d9ec46c0391bf"
+  },
+  {
+    "name": "ps5-opengl",
+    "url": "https://github.com/J7mbo/ps5-opengl.git",
+    "revision": "8f927859fcca5ce3190a8dde6863a07489b18a74"
+  },
+  {
+    "name": "volk",
+    "url": "https://github.com/zeux/volk.git",
+    "revision": "aa76c86ae99aa76f7411c981dc885f68a08513b5"
+  }
+]

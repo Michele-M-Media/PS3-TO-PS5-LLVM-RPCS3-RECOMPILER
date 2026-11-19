@@ -1,0 +1,64 @@
+"""Apply the native platform patch and Recompiler sources to a fresh RPCS3 checkout."""
+
+import argparse
+from pathlib import Path
+import shutil
+import subprocess
+
+PROJECT = Path(__file__).resolve().parents[1]
+REVISION = "ca3e5b268efae904eb9c4c2c97fd62aac980d377"
+
+
+def git(root, *args):
+    return subprocess.check_output(["git", "-C", str(root), *args], text=True).strip()
+
+
+def replace_once(source, text, replacement):
+    if source.count(text) != 1:
+        raise ValueError("Unexpected RPCS3 CMake layout")
+    return source.replace(text, replacement)
+
+
+def apply(root):
+    if git(root, "rev-parse", "HEAD") != REVISION:
+        raise ValueError(f"Use the RPCS3 checkout at {REVISION}")
+    if git(root, "status", "--porcelain"):
+        raise ValueError("Use a clean checkout")
+    patch = PROJECT / "patches/native-platform.patch"
+    git(root, "apply", "--check", str(patch))
+    git(root, "apply", str(patch))
+    shutil.copytree(PROJECT / "overlay", root, dirs_exist_ok=True)
+
+    cmake = root / "rpcs3/CMakeLists.txt"
+    source = cmake.read_text(encoding="utf-8")
+    source = replace_once(source, "    target_sources(rpcs3\n        PRIVATE\n            main.cpp\n    )",
+        """    if(PS5 AND RPCS3_RECOMPILER)
+        set(_launcher "${CMAKE_SOURCE_DIR}/ps5/recompiler")
+        target_sources(rpcs3 PRIVATE
+            "${_launcher}/main.cpp"
+            "${_launcher}/vfs.cpp"
+            "${_launcher}/qt_bridge.cpp"
+            "${_launcher}/cpp_alloc.cpp"
+            "${_launcher}/llvm_exception_trace.cpp")
+        target_include_directories(rpcs3 PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+        target_link_libraries(rpcs3 PRIVATE 3rdparty::qt6)
+        target_link_options(rpcs3 PRIVATE
+            "LINKER:--wrap=__cxa_throw"
+            "LINKER:--wrap=__gxx_personality_v0")
+        get_target_property(_ui_sources rpcs3_ui SOURCES)
+        list(FILTER _ui_sources EXCLUDE REGEX "(^|/)(rpcs3|gui_application|main_window|headless_application)[.]cpp$")
+        set_property(TARGET rpcs3_ui PROPERTY SOURCES "${_ui_sources}")
+    else()
+        target_sources(rpcs3 PRIVATE main.cpp)
+    endif()""")
+    cmake.write_text(source, encoding="utf-8")
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("checkout", type=Path)
+    args = parser.parse_args()
+    try:
+        apply(args.checkout.resolve(strict=True))
+    except (ValueError, OSError, subprocess.CalledProcessError) as error:
+        parser.exit(1, f"{error}\n")
