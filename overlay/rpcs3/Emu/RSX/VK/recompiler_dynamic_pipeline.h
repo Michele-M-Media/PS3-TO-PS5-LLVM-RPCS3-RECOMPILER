@@ -49,11 +49,14 @@ bool eligible(const Pipeline& pipe)
     const auto layouts = (key >> 22) & 0x7fff;
     const auto topology = state.ia.topology;
     const bool ordinary_depth = depth == VK_FORMAT_D24_UNORM_S8_UINT || depth == VK_FORMAT_D32_SFLOAT_S8_UINT;
-    const bool depth_only = color == VK_FORMAT_UNDEFINED && state.cs.attachmentCount == 0 &&
+    const bool depth_only = ordinary_depth && color == VK_FORMAT_UNDEFINED && state.cs.attachmentCount == 0 &&
         (layouts == 3 || layouts == 4);
-    const bool with_color = (color == VK_FORMAT_R16G16B16A16_SFLOAT || color == VK_FORMAT_B8G8R8A8_UNORM) &&
-        state.cs.attachmentCount == 1 && (layouts == 26 || layouts == 28 || layouts == 34);
-    if (!ordinary_depth || (!depth_only && !with_color) ||
+    const bool single_color = color == VK_FORMAT_R16G16B16A16_SFLOAT || color == VK_FORMAT_B8G8R8A8_UNORM ||
+        color == VK_FORMAT_R32_SFLOAT;
+    const bool color_layout = (depth == VK_FORMAT_UNDEFINED && layouts == 2) ||
+        (ordinary_depth && (layouts == 26 || layouts == 28 || layouts == 34));
+    const bool with_color = single_color && state.cs.attachmentCount == 1 && color_layout;
+    if ((!depth_only && !with_color) ||
         ((key >> 16) & 0x3f) != 1 || (key >> 37) ||
         (topology != VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST && topology != VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP) ||
         state.ia.primitiveRestartEnable || state.cs.logicOpEnable ||

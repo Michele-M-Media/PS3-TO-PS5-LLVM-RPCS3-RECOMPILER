@@ -19,6 +19,13 @@ inline constexpr const char* guest_language(int result, int console_language)
         case 20: return "Spanish"; // Spain and Latin America
         case 4: return "German";
         case 5: return "Italian";
+        case 6: return "Dutch";
+        case 7:
+        case 17: return "Portuguese (Portugal)"; // European audio for both Portuguese locales.
+        case 12: return "Finnish";
+        case 13: return "Swedish";
+        case 14: return "Danish";
+        case 15: return "Norwegian";
         default: break;
         }
     }

@@ -1,0 +1,355 @@
+diff --git a/src/vulkan/wsi/wsi_common_videoout.c b/src/vulkan/wsi/wsi_common_videoout.c
+index 1f59ac2..efa145d 100644
+--- a/src/vulkan/wsi/wsi_common_videoout.c
++++ b/src/vulkan/wsi/wsi_common_videoout.c
+@@ -45,6 +45,7 @@
+ #include <stdio.h>
+ #include <stdlib.h>
+ #include <string.h>
++#include <sys/mman.h>
+ 
+ #include "c11/threads.h"
+ #include "util/macros.h"
+@@ -70,14 +71,10 @@
+ #define VIDEOOUT_BUFFER_ALIGNMENT (UINT64_C(2) << 20)
+ #define VIDEOOUT_REFRESH_MILLIHERTZ 59940
+ #define VIDEOOUT_HIGH_REFRESH_MILLIHERTZ 119880
+-/* A period above this after the high-frame-rate mode was taken: the display
+- * went on refreshing at 60 Hz, as a tester's did (PS5_Vulkan, R31). */
+-#define VIDEOOUT_HIGH_REFRESH_LIMIT_NS UINT64_C(12500000)
+ #define VIDEOOUT_PERIOD_INTERVALS 6
+-/* param.json's attribute3 bit for 120 Hz output. PS5_Vulkan R31/R92 declared it with 0x80000
+- * (a 120 Hz mode that requires VRR), which turns the system's VRR off; retail titles with VRR
+- * declare 0x40 with 0x40000. VideoOut itself grants mode 15 or refuses it. */
+-#define VIDEOOUT_ATTRIBUTE3_HIGH_FRAME_RATE 0x40u
++#include "videoout_refresh_policy.h"
++
++extern void recompiler_log_display_mode(const char *line) __attribute__((weak));
+ 
+ #if !defined(__PROSPERO__)
+ /* The host model: flips show at once and a vblank comes every millisecond,
+@@ -106,6 +103,13 @@ sceVideoOutOpen(int32_t user, int32_t bus, int32_t index, const void *parameter)
+    return 1;
+ }
+ 
++static int
++sceVideoOutClose(int32_t handle)
++{
++   host_shown_argument = 0;
++   return 0;
++}
++
+ static int
+ sceVideoOutSetFlipRate(int32_t handle, int32_t rate)
+ {
+@@ -260,6 +264,10 @@ struct wsi_videoout_output {
+    struct wsi_videoout_set {
+       const struct wsi_videoout_size *size;
+       uint8_t *buffers;
++      bool registered;
++#if defined(__PROSPERO__)
++      int64_t physical;
++#endif
+    } sets[VIDEOOUT_SIZES];
+    uint32_t set_count;
+    /* The argument of the latest flip submitted; each flip's is one more. */
+@@ -277,6 +285,9 @@ struct wsi_videoout_output {
+ 
+    /* The flip thread and its queue. */
+    bool thread_started;
++   bool stop_thread;
++   bool releasing;
++   uint32_t active_swapchains;
+    thrd_t thread;
+    struct wsi_videoout_present queue[VIDEOOUT_BUFFERS * 2];
+    uint32_t queue_head, queue_count;
+@@ -316,22 +327,34 @@ struct wsi_videoout {
+ 
+ /* The title's param.json: /app0's, or the one PS5_VIDEOOUT_PARAM_JSON names, for a title
+  * without /app0 (an elevated process does not see it). */
+-static bool
+-videoout_title_declares_high_frame_rate(void)
++static unsigned long
++videoout_title_display_attributes(void)
+ {
+    const char *const path = getenv("PS5_VIDEOOUT_PARAM_JSON");
+    FILE *const file = fopen(path != NULL && path[0] != '\0' ? path : "/app0/sce_sys/param.json", "rb");
+    if (file == NULL)
+-      return false;
++      return 0;
+    char text[16384];
+    const size_t length = fread(text, 1, sizeof(text) - 1, file);
+    fclose(file);
+    text[length] = '\0';
+    const char *at = strstr(text, "\"attribute3\"");
+    if (at == NULL || (at = strchr(at, ':')) == NULL)
+-      return false;
+-   const unsigned long value = strtoul(at + 1, NULL, 0);
+-   return (value & VIDEOOUT_ATTRIBUTE3_HIGH_FRAME_RATE) == VIDEOOUT_ATTRIBUTE3_HIGH_FRAME_RATE;
++      return 0;
++   return strtoul(at + 1, NULL, 0);
++}
++
++static void
++videoout_log_refresh(const char *action, unsigned long attributes, int supported,
++                     int configured, uint64_t period, int restore)
++{
++   char message[192];
++   snprintf(message, sizeof(message),
++            "RECOMPILER_DISPLAY_MODE: videoout=%s attributes=0x%lx support=%d config=%d period_ms=%.3f restore=%d",
++            action, attributes, supported, configured, (double)period / 1e6, restore);
++   fprintf(stderr, "%s\n", message);
++   if (recompiler_log_display_mode)
++      recompiler_log_display_mode(message);
+ }
+ 
+ /* The refresh period: the median of a few intervals between vblank waits,
+@@ -366,6 +389,8 @@ static bool
+ videoout_open_locked(void)
+ {
+    struct wsi_videoout_output *out = &videoout_output;
++   if (out->releasing)
++      return false;
+    if (out->opened)
+       return out->handle >= 0;
+    out->opened = true;
+@@ -374,7 +399,8 @@ videoout_open_locked(void)
+       fprintf(stderr, "wsi/videoout: sceVideoOutOpen failed: 0x%08x\n", (unsigned)out->handle);
+       return false;
+    }
+-   if (videoout_title_declares_high_frame_rate()) {
++   const unsigned long attributes = videoout_title_display_attributes();
++   if (attributes & VIDEOOUT_ATTRIBUTE3_HIGH_FRAME_RATE) {
+       /* Positive: the output takes the mode. 0: it does not at the
+        * console's present output, which is no error. A 1440p display answered
+        * 0 while the console sent it 1080p (the console logged no 120 Hz format
+@@ -388,25 +414,24 @@ videoout_open_locked(void)
+             : -1;
+       out->high_frame_rate = supported > 0 && configured == 0;
+       if (out->high_frame_rate) {
+-         /* A period of 0 is a failed wait: never taken for 119.88 Hz */
+          const uint64_t period = videoout_vblank_period_ns(out->handle);
+-         if (period == 0 || period > VIDEOOUT_HIGH_REFRESH_LIMIT_NS) {
+-            sceVideoOutConfigureOutput(out->handle, PS5_VIDEO_OUT_MODE_RESTORE, NULL, NULL, NULL);
++         const enum videoout_refresh_observation observation =
++            videoout_refresh_check(period, (attributes & VIDEOOUT_ATTRIBUTE3_VRR) != 0);
++         if (observation == VIDEOOUT_REFRESH_RESTORE) {
++            const int restored = sceVideoOutConfigureOutput(out->handle, PS5_VIDEO_OUT_MODE_RESTORE, NULL, NULL, NULL);
+             out->high_frame_rate = false;
+-            if (period == 0)
+-               fprintf(stderr, "wsi/videoout: 119.88 Hz accepted, but a vblank wait failed; 59.94 Hz restored\n");
+-            else
+-               fprintf(stderr,
+-                       "wsi/videoout: 119.88 Hz accepted, but a vblank comes every %.3f ms; 59.94 Hz restored\n",
+-                       (double)period / 1e6);
++            videoout_log_refresh("restore", attributes, supported, configured, period, restored);
++         } else {
++            videoout_log_refresh(observation == VIDEOOUT_REFRESH_VRR_IDLE_POSSIBLE
++                                 ? "vrr_idle_candidate" : "high_period",
++                                 attributes, supported, configured, period, 0);
+          }
+-      } else if (supported > 0) {
+-         fprintf(stderr, "wsi/videoout: 119.88 Hz refused (%d); presenting at 59.94 Hz\n", configured);
+       } else {
+-         fprintf(stderr,
+-                 "wsi/videoout: 119.88 Hz not offered on the console's present output (%d); presenting at 59.94 Hz\n",
+-                 supported);
++         videoout_log_refresh(supported > 0 ? "refused" : "unsupported",
++                              attributes, supported, configured, 0, 0);
+       }
++   } else {
++      videoout_log_refresh("no_title_opt_in", attributes, -1, -1, 0, 0);
+    }
+    return true;
+ }
+@@ -452,6 +477,8 @@ videoout_register_locked(const struct wsi_videoout_size *size, const struct wsi_
+    struct wsi_videoout_output *out = &videoout_output;
+    for (uint32_t i = 0; i < out->set_count; i++) {
+       if (out->sets[i].size == size) {
++         if (!out->sets[i].registered)
++            return VK_ERROR_INITIALIZATION_FAILED;
+          *set_out = &out->sets[i];
+          return VK_SUCCESS;
+       }
+@@ -487,6 +514,14 @@ videoout_register_locked(const struct wsi_videoout_size *size, const struct wsi_
+       return VK_ERROR_OUT_OF_DEVICE_MEMORY;
+ #endif
+ 
++   /* Track allocations even when registration fails: only a successful
++    * VideoOut close permits releasing memory the display may have seen. */
++   out->sets[index] = (struct wsi_videoout_set){.size = size, .buffers = buffers,
++#if defined(__PROSPERO__)
++                                               .physical = physical,
++#endif
++   };
++   out->set_count = index + 1;
+    int result = index == 0 ? sceVideoOutSetFlipRate(out->handle, videoout_flip_rate) : 0;
+    struct ps5_video_out_buffer registered[VIDEOOUT_BUFFERS];
+    for (uint32_t i = 0; i < VIDEOOUT_BUFFERS; i++)
+@@ -505,8 +540,7 @@ videoout_register_locked(const struct wsi_videoout_size *size, const struct wsi_
+    }
+    fprintf(stderr, "wsi/videoout: %ux%u framebuffers registered as set %u, buffers %u-%u\n", size->extent.width,
+            size->extent.height, index, index * VIDEOOUT_BUFFERS, index * VIDEOOUT_BUFFERS + VIDEOOUT_BUFFERS - 1);
+-   out->sets[index] = (struct wsi_videoout_set){.size = size, .buffers = buffers};
+-   out->set_count = index + 1;
++   out->sets[index].registered = true;
+    *set_out = &out->sets[index];
+    return VK_SUCCESS;
+ }
+@@ -527,8 +561,10 @@ videoout_flip_thread(void *data)
+    struct wsi_videoout_output *out = &videoout_output;
+    mtx_lock(&out->lock);
+    for (;;) {
+-      while (out->queue_count == 0)
++      while (out->queue_count == 0 && !out->stop_thread)
+          cnd_wait(&out->changed, &out->lock);
++      if (out->queue_count == 0 && out->stop_thread)
++         break;
+       const struct wsi_videoout_present present = out->queue[out->queue_head];
+       mtx_unlock(&out->lock);
+ 
+@@ -553,6 +589,7 @@ videoout_flip_thread(void *data)
+       chain->in_flight--;
+       cnd_broadcast(&out->changed);
+    }
++   mtx_unlock(&out->lock);
+    return 0;
+ }
+ 
+@@ -1123,6 +1160,10 @@ videoout_swapchain_destroy(struct wsi_swapchain *wsi_chain, const VkAllocationCa
+    }
+    wsi_swapchain_finish(&chain->base);
+    vk_free(pAllocator, chain);
++   mtx_lock(&out->lock);
++   assert(out->active_swapchains > 0);
++   out->active_swapchains--;
++   mtx_unlock(&out->lock);
+    return VK_SUCCESS;
+ }
+ 
+@@ -1200,6 +1241,7 @@ videoout_surface_create_swapchain(VkIcdSurfaceBase *icd_surface, VkDevice device
+    if (out->current)
+       out->current->retired = true;
+    out->current = chain;
++   out->active_swapchains++;
+    mtx_unlock(&out->lock);
+ 
+    *swapchain_out = &chain->base;
+@@ -1243,3 +1285,79 @@ void
+ wsi_display_setup_syncobj_fd(struct wsi_device *wsi_device, int fd)
+ {
+ }
++
++/* RPCS3 Qt handoff. Call after destroying all swapchains AND the Vulkan
++ * instance; external synchronization is required against Vulkan creation.
++ * Never grant EGL ownership after a failed close or while images are live.
++ * This is an application integration API, not a Vulkan extension. */
++PUBLIC VkResult wsi_videoout_release_output(void);
++PUBLIC VkResult
++wsi_videoout_release_output(void)
++{
++   call_once(&videoout_once, videoout_output_init_once);
++   struct wsi_videoout_output *out = &videoout_output;
++   mtx_lock(&out->lock);
++   if (out->active_swapchains || out->queue_count || out->releasing) {
++      mtx_unlock(&out->lock);
++      return VK_ERROR_NATIVE_WINDOW_IN_USE_KHR;
++   }
++   out->releasing = true;
++   out->stop_thread = true;
++   cnd_broadcast(&out->changed);
++   const bool join = out->thread_started;
++   const thrd_t thread = out->thread;
++   mtx_unlock(&out->lock);
++   if (join)
++      thrd_join(thread, NULL);
++   mtx_lock(&out->lock);
++   out->thread_started = false;
++   out->stop_thread = false;
++   VkResult result = VK_SUCCESS;
++   if (out->handle >= 0) {
++      if (out->high_frame_rate)
++         sceVideoOutConfigureOutput(out->handle, PS5_VIDEO_OUT_MODE_RESTORE, NULL, NULL, NULL);
++      const int closed = sceVideoOutClose(out->handle);
++      if (closed != 0) {
++         fprintf(stderr, "wsi/videoout: display handoff close failed: 0x%08x\n", (unsigned)closed);
++         result = VK_ERROR_INITIALIZATION_FAILED;
++         goto done;
++      }
++      out->handle = -1;
++   }
++   out->opened = false;
++   out->high_frame_rate = false;
++   out->modes_settled = false;
++   out->high_mode_offered = false;
++   for (uint32_t i = 0; i < out->set_count; i++) {
++      struct wsi_videoout_set *set = &out->sets[i];
++      const size_t bytes = VIDEOOUT_BUFFERS * set->size->buffer_bytes;
++      set->registered = false;
++      if (set->buffers) {
++         if (munmap(set->buffers, bytes) != 0) {
++            result = VK_ERROR_MEMORY_MAP_FAILED;
++            continue; /* Keep the physical allocation backing a live mapping. */
++         }
++         set->buffers = NULL;
++      }
++#if defined(__PROSPERO__)
++      if (set->physical >= 0) {
++         if (sceKernelReleaseDirectMemory(set->physical, bytes) != 0) {
++            result = VK_ERROR_MEMORY_MAP_FAILED;
++            continue;
++         }
++         set->physical = -1;
++      }
++#endif
++   }
++   if (result == VK_SUCCESS) {
++      memset(out->sets, 0, sizeof(out->sets));
++      out->set_count = 0;
++      memset(out->buffer, 0, sizeof(out->buffer));
++      out->flip_argument = 0;
++      out->queue_head = 0;
++   }
++done:
++   out->releasing = false;
++   mtx_unlock(&out->lock);
++   return result;
++}
+diff --git a/src/vulkan/wsi/videoout_refresh_policy.h b/src/vulkan/wsi/videoout_refresh_policy.h
+new file mode 100644
+index 0000000..030f2d4
+--- /dev/null
++++ b/src/vulkan/wsi/videoout_refresh_policy.h
+@@ -0,0 +1,32 @@
++/* SPDX-License-Identifier: MIT */
++#ifndef VIDEOOUT_REFRESH_POLICY_H
++#define VIDEOOUT_REFRESH_POLICY_H
++
++#include <stdbool.h>
++#include <stdint.h>
++
++#define VIDEOOUT_ATTRIBUTE3_HIGH_FRAME_RATE 0x40u
++#define VIDEOOUT_ATTRIBUTE3_VRR 0x40000u
++
++enum videoout_refresh_observation {
++   VIDEOOUT_REFRESH_RESTORE,
++   VIDEOOUT_REFRESH_HIGH_PERIOD,
++   VIDEOOUT_REFRESH_VRR_IDLE_POSSIBLE,
++};
++
++/* After a successful VideoOut request, an idle VRR screen can sit around 48 Hz
++ * until the first flip. Keep that mode pending the hardware observation.
++ * Retain the normal restoration path for a failed sample or fixed 60 Hz.
++ * https://github.com/mihawk-99/PS5_Mesa/issues/4
++ */
++static inline enum videoout_refresh_observation
++videoout_refresh_check(uint64_t period_ns, bool declares_vrr)
++{
++   if (period_ns > 0 && period_ns <= UINT64_C(12500000))
++      return VIDEOOUT_REFRESH_HIGH_PERIOD;
++   if (declares_vrr && period_ns > UINT64_C(18500000) && period_ns <= UINT64_C(25000000))
++      return VIDEOOUT_REFRESH_VRR_IDLE_POSSIBLE;
++   return VIDEOOUT_REFRESH_RESTORE;
++}
++
++#endif

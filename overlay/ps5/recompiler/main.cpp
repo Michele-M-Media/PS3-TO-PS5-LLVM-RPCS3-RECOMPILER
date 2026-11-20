@@ -25,6 +25,9 @@
 #include "Utilities/File.h"
 #include "util/yaml.hpp"
 #include "recompiler_system_language.h"
+#if __has_include("recompiler_title_update_manifest.h")
+#include "recompiler_title_update.h"
+#endif
 #include "recompiler_trophy_notice.h"
 #include <QApplication>
 #include <QMetaObject>
@@ -43,6 +46,11 @@ namespace rpcs3::ps5 { void initialize_qt_platform(); void initialize_core_paths
 int recompiler_rpcs3_prepare_vfs(const char*, const char*);
 extern "C" void catchReturnFromMain(int);
 LOG_CHANNEL(sys_log, "SYS");
+extern "C" void recompiler_log_display_mode(const char* line)
+{
+    sys_log.notice("%s", line);
+}
+
 atomic_t<bool> g_headless = true;
 std::string g_input_config_override;
 
@@ -139,6 +147,9 @@ bool recompiler_title_application::Init()
     {
         if(g_cfg.video.renderer != video_renderer::vulkan)
             report_fatal_error("This title build requires its native Vulkan backend",false,false);
+        const char* target = g_cfg.video.frame_limit == frame_limit_type::_120 ? "119880" : "60000";
+        if (::setenv("RPCS3_PS5_DISPLAY_TARGET_MILLIHZ", target, 1) != 0)
+            sys_log.warning("RECOMPILER_DISPLAY_MODE: unable to apply profile target %s mHz", target);
         g_fxo->init<rsx::thread,named_thread<VKGSRender>>(ar);
     };
     callbacks.get_gs_frame = [this]() -> std::unique_ptr<GSFrameBase>
@@ -307,10 +318,18 @@ int main()
     const char* data=std::getenv("RPCS3_PS5_DATA_ROOT");
     const char* app=std::getenv("RPCS3_PS5_APP_ROOT");
     if (!data || !app) return 67;
+    const std::string videoout_param = std::string(app) + "/sce_sys/param.json";
+    if (fs::is_file(videoout_param))
+    {
+        const int result = ::setenv("PS5_VIDEOOUT_PARAM_JSON", videoout_param.c_str(), 1);
+        std::fprintf(stderr, "RECOMPILER_VIDEOOUT_PARAM: title metadata configured=%d\n", result == 0);
+    }
     configure_radv_cache(data);
     const std::string game=std::string(app)+"/PS3_GAME/USRDIR/EBOOT.BIN";
-    const std::string config=std::string(app)+"/rpcs3-recompiler.yml";
+    const bool pro_profile = fs::is_file(std::string(app) + "/ps5-pro.enable");
+    const std::string config = std::string(app) + (pro_profile ? "/rpcs3-recompiler-pro.yml" : "/rpcs3-recompiler.yml");
     if(!fs::is_file(game) || !fs::is_file(config)) return 64;
+    std::fprintf(stderr, "RECOMPILER_GRAPHICS_PROFILE: %s\n", pro_profile ? "pro" : "base");
     fs::file lock(fs::get_cache_dir()+"recompiler-core.lock",fs::rewrite+fs::lock);
     if (!lock) return 72;
     if (const int error = recompiler_rpcs3_prepare_vfs(data, app)) return error;
@@ -330,6 +349,10 @@ int main()
     recompiler_title_application title(argc,argv);
     memory_stage("qt_ready");
     if(!title.Init()) return 73;
+#if __has_include("recompiler_title_update_manifest.h")
+    if (!recompiler_title_update::apply(app, data, sys_log))
+        return 75;
+#endif
     memory_stage("core_initialized");
     QTimer::singleShot(0, &title, [game,config]()
     {

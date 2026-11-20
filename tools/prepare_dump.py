@@ -45,7 +45,7 @@ def inspect(disc):
     return {"title_id": title_id, "title": fields.get("TITLE", title_id), "app_version": fields.get("APP_VER")}
 
 
-def native_metadata(path):
+def native_metadata(path, display_mode="default"):
     document = json.loads(path.read_text(encoding="utf-8-sig"))
     title_id = document.get("titleId", "")
     if not re.fullmatch(r"[A-Z]{4}[0-9]{5}", title_id) or title_id == "PPSA00000":
@@ -56,6 +56,13 @@ def native_metadata(path):
     for item in localized.values():
         if isinstance(item, dict):
             item["titleName"] = TITLE
+    if display_mode != "default":
+        attributes = document.get("attribute3", 0)
+        if type(attributes) is not int or not 0 <= attributes <= 0xffffffff:
+            raise ValueError("param.json must contain a numeric attribute3 bit field")
+        document["attribute3"] = attributes | 0x40
+        if display_mode == "120hz-vrr":
+            document["attribute3"] |= 0x40000
     return document
 
 
@@ -76,7 +83,7 @@ def stage(args):
     firmware = args.firmware.resolve(strict=True)
     if not (firmware / "sys/external").is_dir():
         raise ValueError("Select the dev_flash directory from your local RPCS3 firmware installation")
-    metadata = native_metadata(args.param)
+    metadata = native_metadata(args.param, args.display_mode)
     icon = png(args.icon0 or TEMPLATE.with_name("icon0.png"))
     background = png(args.pic0) if args.pic0 else None
     if output.is_relative_to(disc) or output.is_relative_to(firmware):
@@ -87,7 +94,12 @@ def stage(args):
     shutil.copyfile(disc / "PS3_DISC.SFB", output / "PS3_DISC.SFB")
     shutil.copytree(firmware, output / "dev_flash")
     shutil.copyfile(core, output / "eboot.bin")
-    shutil.copyfile(TEMPLATE, output / TEMPLATE.name)
+    config = TEMPLATE.read_text(encoding="utf-8")
+    if args.display_mode != "default":
+        config = config.replace("  Renderer: Vulkan\n", "  Renderer: Vulkan\n  Frame limit: 120\n", 1)
+    (output / TEMPLATE.name).write_text(config, encoding="utf-8", newline="\n")
+    if args.spu_hybrid:
+        (output / "spu-hybrid.enable").touch()
     (output / "sce_sys").mkdir()
     shutil.copyfile(icon, output / "sce_sys/icon0.png")
     if background:
@@ -110,6 +122,9 @@ def main():
         build.add_argument("--" + name, type=Path, required=True)
     build.add_argument("--icon0", type=Path, help="Override the default RPCS3 icon")
     build.add_argument("--pic0", type=Path, help="Use a custom background")
+    build.add_argument("--display-mode", choices=("default", "120hz", "120hz-vrr"), default="default",
+                       help="Select a high-refresh profile for a compatible game and display")
+    build.add_argument("--spu-hybrid", action="store_true", help="Allow AsmJit on live SPU cache misses")
     args = parser.parse_args()
     try:
         info = inspect(args.disc) if args.command == "inspect" else stage(args)

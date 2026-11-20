@@ -1,5 +1,6 @@
 #include "stdafx.h"
 #include "VKGSRender.h"
+#include "recompiler_frame_cadence.h"
 #include "vkutils/buffer_object.h"
 #include "vkutils/memory.h"
 #include "Emu/RSX/Overlays/overlay_manager.h"
@@ -21,6 +22,7 @@ namespace
 {
 	using frame_clock = std::chrono::steady_clock;
 	thread_local s64 frame_present_max_us = 0;
+	thread_local recompiler::frame_cadence display_cadence;
 
 	constexpr bool slow_guest_frame(s64 gap_us, s64 acquire_us, s64 queue_us, s64 present_us)
 	{
@@ -167,6 +169,8 @@ void VKGSRender::present(vk::frame_context_t *ctx)
 		const auto present_begin = frame_clock::now();
 		const VkResult error = m_swapchain->present(ctx->present_wait_semaphore, ctx->present_image);
 		frame_present_max_us = std::max(frame_present_max_us, frame_elapsed_us(present_begin, frame_clock::now()));
+		if (!m_swapchain->is_headless())
+			display_cadence.present(error == VK_SUCCESS || error == VK_SUBOPTIMAL_KHR);
 		switch (error)
 		{
 		case VK_SUCCESS:
@@ -437,6 +441,14 @@ vk::viewable_image* VKGSRender::get_present_source(/* inout */ vk::present_surfa
 void VKGSRender::flip(const rsx::display_flip_info_t& info)
 {
 	const auto frame_begin = frame_clock::now();
+	const s64 now_us = std::chrono::duration_cast<std::chrono::microseconds>(frame_begin.time_since_epoch()).count();
+	if (const auto window = display_cadence.flip(now_us, info.emu_flip, info.skip_frame))
+	{
+		rsx_log.notice("RECOMPILER_CADENCE: end_us=%lld window_us=%lld guest_flips=%u skipped=%u "
+			"guest_vk_presents=%u other_vk_presents=%u vk_present_errors=%u max_guest_gap_us=%lld",
+			now_us, window->elapsed_us, window->guest_flips, window->skipped, window->guest_presents,
+			window->other_presents, window->failed_presents, window->max_guest_gap_us);
+	}
 	thread_local frame_clock::time_point previous_guest_flip{};
 	thread_local frame_clock::time_point previous_frame_report{};
 	const bool guest_frame = info.emu_flip && !info.skip_frame;

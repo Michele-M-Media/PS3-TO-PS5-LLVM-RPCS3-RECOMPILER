@@ -1,0 +1,56 @@
+diff --git a/rpcs3/Emu/Cell/SPUThread.cpp b/rpcs3/Emu/Cell/SPUThread.cpp
+--- a/rpcs3/Emu/Cell/SPUThread.cpp
++++ b/rpcs3/Emu/Cell/SPUThread.cpp
+@@ -27,6 +27,7 @@
+ 
+ #include <cmath>
+ #include <cfenv>
++#include <cstdlib>
+ #include <thread>
+ #include <shared_mutex>
+ #include <span>
+@@ -1797,6 +1798,25 @@
+ 	if (spu_decoder == spu_decoder_type::llvm)
+ 	{
+ #if defined(ARCH_X64)
++#ifdef RPCS3_PS5
++		// Cache workers still build with LLVM. AsmJit handles live dispatch misses.
++		static const bool hybrid_enabled = []
++		{
++			const char* app_root = std::getenv("RPCS3_PS5_APP_ROOT");
++			if (app_root && *app_root && fs::is_file(std::string(app_root) + "/spu-hybrid.enable"))
++			{
++				spu_log.notice("SPU hybrid JIT: LLVM precompilation, AsmJit on runtime cache misses");
++				return true;
++			}
++			return false;
++		}();
++
++		if (hybrid_enabled)
++		{
++			jit = spu_recompiler_base::make_asmjit_recompiler();
++			return;
++		}
++#endif
+ 		jit = spu_recompiler_base::make_fast_llvm_recompiler();
+ #elif defined(ARCH_ARM64)
+ 		jit = spu_recompiler_base::make_llvm_recompiler();
+diff --git a/rpcs3/Emu/Cell/SPUASMJITRecompiler.cpp b/rpcs3/Emu/Cell/SPUASMJITRecompiler.cpp
+--- a/rpcs3/Emu/Cell/SPUASMJITRecompiler.cpp
++++ b/rpcs3/Emu/Cell/SPUASMJITRecompiler.cpp
+@@ -913,6 +913,15 @@
+ 	{
+ 		add_loc->compiled.notify_all();
+ 	}
++
++#ifdef RPCS3_PS5
++	// In LLVM mode, this compiler is only used for live hybrid dispatch misses.
++	static atomic_t<bool> reported{false};
++	if (added && fn && g_cfg.core.spu_decoder == spu_decoder_type::llvm && !reported && !reported.exchange(true))
++	{
++		spu_log.notice("SPU hybrid JIT: compiled first live AsmJit block at 0x%05x", start0);
++	}
++#endif
+ 
+ 	if (g_cfg.core.spu_debug && added)
+ 	{

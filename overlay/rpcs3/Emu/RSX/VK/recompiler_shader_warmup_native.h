@@ -44,6 +44,8 @@ namespace vk::recompiler_warmup
 
 		bool operator==(const record& other) const
 		{
+			if (std::memcmp(this, &other, sizeof(record)) == 0)
+				return true;
 			return options == other.options && properties() == other.properties();
 		}
 	};
@@ -69,7 +71,8 @@ namespace vk::recompiler_warmup
 		// Validate render states before creating Vulkan pipelines from the journal.
 		const auto color = static_cast<VkFormat>(data.renderpass & 0xff);
 		const auto depth = static_cast<VkFormat>((data.renderpass >> 8) & 0xff);
-		if (color != VK_FORMAT_UNDEFINED && color != VK_FORMAT_B8G8R8A8_UNORM && color != VK_FORMAT_R16G16B16A16_SFLOAT)
+		if (color != VK_FORMAT_UNDEFINED && color != VK_FORMAT_B8G8R8A8_UNORM &&
+			color != VK_FORMAT_R16G16B16A16_SFLOAT && color != VK_FORMAT_R32_SFLOAT)
 			return false;
 		if (depth != VK_FORMAT_UNDEFINED && depth != VK_FORMAT_D24_UNORM_S8_UINT && depth != VK_FORMAT_D32_SFLOAT_S8_UINT)
 			return false;
@@ -85,6 +88,11 @@ namespace vk::recompiler_warmup
 			if (layout > 3 && (layout != recompiler_feedback::feedback_layout || !device.get_framebuffer_loops_support()))
 				return false;
 		}
+		if (color == VK_FORMAT_R32_SFLOAT &&
+			std::any_of(data.attachments, data.attachments + data.blend.attachmentCount,
+				[](const auto& attachment) { return attachment.blendEnable; }) &&
+			!(device.get_format_properties(color).optimalTilingFeatures & VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BLEND_BIT))
+			return false;
 		return (color == VK_FORMAT_UNDEFINED || (device.get_format_properties(color).optimalTilingFeatures & VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT)) &&
 			(depth == VK_FORMAT_UNDEFINED || (device.get_format_properties(depth).optimalTilingFeatures & VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT));
 	}

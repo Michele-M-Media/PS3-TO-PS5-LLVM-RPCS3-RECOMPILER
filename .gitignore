@@ -3,6 +3,8 @@ __pycache__/
 /local/
 /rpcs3/
 *.bin
+UPDATE.BIN
+recompiler_title_update_manifest.h
 *.elf
 *.self
 *.pkg

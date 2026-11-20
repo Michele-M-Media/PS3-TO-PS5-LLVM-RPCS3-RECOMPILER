@@ -1055,6 +1055,32 @@ namespace vk
 		VkPhysicalDeviceMemoryProperties memory_properties;
 		vkGetPhysicalDeviceMemoryProperties(pdev, &memory_properties);
 
+#ifdef RPCS3_PS5
+		const supported_extensions extensions(supported_extensions::device, nullptr, pdev);
+		if (vkGetPhysicalDeviceMemoryProperties2 && extensions.is_supported(VK_EXT_MEMORY_BUDGET_EXTENSION_NAME))
+		{
+			VkPhysicalDeviceMemoryBudgetPropertiesEXT budget{};
+			budget.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MEMORY_BUDGET_PROPERTIES_EXT;
+			VkPhysicalDeviceMemoryProperties2 properties{};
+			properties.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MEMORY_PROPERTIES_2;
+			properties.pNext = &budget;
+			vkGetPhysicalDeviceMemoryProperties2(pdev, &properties);
+			for (u32 i = 0; i < properties.memoryProperties.memoryHeapCount; ++i)
+			{
+				const auto& heap = properties.memoryProperties.memoryHeaps[i];
+				if ((heap.flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT) && budget.heapBudget[i])
+				{
+					rsx_log.notice("RECOMPILER_GPU_MEMORY: heap=%u size=%u budget=%u usage=%u", i,
+						heap.size, budget.heapBudget[i], budget.heapUsage[i]);
+				}
+			}
+		}
+		else
+		{
+			rsx_log.notice("RECOMPILER_GPU_MEMORY: driver memory budget unavailable");
+		}
+#endif
+
 		memory_type_mapping result;
 		result.device_local_total_bytes = 0;
 		result.host_visible_total_bytes = 0;

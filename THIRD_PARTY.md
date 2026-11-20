@@ -12,3 +12,5 @@ The default icon uses the [RPCS3 logo](https://github.com/RPCS3/rpcs3/blob/ca3e5
 | volk | [volk](https://github.com/zeux/volk/tree/aa76c86ae99aa76f7411c981dc885f68a08513b5), [MIT license](licenses/volk-LICENSE.md) |
 
 The LLVM target selector retains [LLVM's Apache 2.0 license with LLVM exceptions](licenses/LLVM-LICENSE.txt). The external SDK, Qt, FFmpeg and the other build inputs retain the terms provided with their own source trees. This repository distributes source changes. Review the complete dependency terms before redistributing linked binaries.
+
+The [VideoOut patch](patches/mesa-videoout.patch) applies to the pinned PS5 Mesa source above and keeps its MIT terms. The SPU hybrid path uses [AsmJit](https://github.com/asmjit/asmjit) through the RPCS3 dependency tree.

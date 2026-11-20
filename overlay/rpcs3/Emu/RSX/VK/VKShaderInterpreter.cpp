@@ -922,12 +922,15 @@ namespace vk
 		dlg->set_value(1, 0);
 		dlg->update_msg(1, "Precompiling known shader variants...");
 		dlg->refresh();
-		u32 done = 0;
+		struct warmup_job
+		{
+			pipeline_key key;
+			bool compatible;
+			std::vector<u64> requested_options;
+		};
+		std::vector<warmup_job> jobs;
 		for (const auto& saved : preload)
 		{
-			if (Emu.IsStopped())
-				break;
-			dlg->set_value(1, ++done);
 			const auto properties = recompiler_dynamic::canonical(saved.properties(), dynamic_pipeline);
 			u64 options = saved.options;
 			const bool feedback = recompiler_feedback::flags(properties.renderpass_key, properties.state.cs.attachmentCount,
@@ -948,36 +951,81 @@ namespace vk
 				}
 			}
 			const pipeline_key key{options, properties};
+			const auto duplicate = std::find_if(jobs.begin(), jobs.end(), [&](const warmup_job& job)
+			{
+				return job.key == key;
+			});
+			if (duplicate != jobs.end())
+			{
+				duplicate->compatible |= compatible;
+				if (std::find(duplicate->requested_options.begin(), duplicate->requested_options.end(), saved.options) == duplicate->requested_options.end())
+					duplicate->requested_options.push_back(saved.options);
+				continue;
+			}
 			{
 				reader_lock read_lock(m_program_cache_lock);
 				const auto found = m_program_cache.find(key);
 				if (found != m_program_cache.end() && found->second.program && !found->second.flags)
 					continue;
 			}
+			jobs.push_back({key, compatible, {saved.options}});
+		}
 
-			if (auto program = link(key.properties, key.compiler_opt))
+		const u32 jobs_total = ::size32(jobs);
+		dlg->set_limit(1, jobs_total);
+		auto prepared = std::make_shared<atomic_t<u32>>(0);
+		const auto wait_for_warmup = [&](u32 target)
+		{
+			while (prepared->load() < target && !Emu.IsStopped() && thread_ctrl::state() != thread_state::aborting)
 			{
-				std::lock_guard write_lock(m_program_cache_lock);
-				m_program_cache.insert_or_assign(key, pipeline_cache_entry_t{.flags = 0, .program = program});
-				if (compatible)
+				std::this_thread::sleep_for(16ms);
+				dlg->set_value(1, prepared->load());
+				dlg->refresh();
+			}
+			return !Emu.IsStopped() && thread_ctrl::state() != thread_state::aborting;
+		};
+		constexpr u32 warmup_pending_limit = 8;
+		u32 warmup_queued = 0;
+		for (const auto& job : jobs)
+		{
+			if (!wait_for_warmup(warmup_queued >= warmup_pending_limit ? warmup_queued - warmup_pending_limit + 1 : 0))
+				break;
+			const auto key = job.key;
+			link(key.properties, key.compiler_opt, true,
+				[this, key, compatible = job.compatible, aliases, prepared](std::shared_ptr<glsl::program>& program)
+			{
+				if (compatible && program)
 				{
-					for (const auto& variant : variants.pipelines)
+					for (const u64 exact : std::as_const(*aliases).at(key.compiler_opt))
 					{
-						if ((variant.vs_opts.compatible_shader_opts | variant.fs_opts.compatible_shader_opts) == options)
-						{
-							const pipeline_key alias{variant.vs_opts.shader_opt | variant.fs_opts.shader_opt, properties};
-							m_program_cache.try_emplace(alias,
-								pipeline_cache_entry_t{.flags = CACHED_PIPE_UNOPTIMIZED, .program = program});
-						}
+						m_program_cache.try_emplace(pipeline_key{exact, key.properties},
+							pipeline_cache_entry_t{.flags = CACHED_PIPE_UNOPTIMIZED, .program = program});
 					}
 				}
-				title_warmup.warmed.push_back(recompiler_warmup::from_pipeline(saved.options, properties));
-			}
-			dlg->refresh();
+				++(*prepared);
+			});
+			++warmup_queued;
 		}
+		const bool finished = wait_for_warmup(warmup_queued);
 		title_warmup.end_preload();
+		if (!finished)
+			return;
+		dlg->set_value(1, jobs_total);
+		{
+			reader_lock read_lock(m_program_cache_lock);
+			for (const auto& job : jobs)
+			{
+				for (const u64 option : job.requested_options)
+				{
+					const auto found = m_program_cache.find(pipeline_key{option, job.key.properties});
+					if (found != m_program_cache.end() && found->second.program)
+						title_warmup.warmed.push_back(recompiler_warmup::from_pipeline(option, job.key.properties));
+				}
+			}
+		}
+		rsx_log.notice("RECOMPILER_WARMUP_PARALLEL: jobs=%u completed=%u limit=%u", jobs_total, prepared->load(), warmup_pending_limit);
 		rsx_log.notice("RECOMPILER_SHADER_FEEDBACK_PRELOAD: paired=%u prepared=%u",
 			paired, ::size32(title_warmup.warmed));
-		rsx_log.notice("RECOMPILER_SHADER_WARMUP: startup recorded=%u compiled=%u", total, ::size32(title_warmup.warmed));
+		rsx_log.notice("RECOMPILER_SHADER_WARMUP: startup recorded=%u compiled=%u", total, prepared->load());
 	}
 };
