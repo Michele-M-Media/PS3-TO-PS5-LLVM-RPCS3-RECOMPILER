@@ -26,6 +26,8 @@ The package uses the RPCS3 icon by default. Pass `--icon0 path/to/icon.png` to r
 
 ## Display, controller and SPU options
 
+**For all games prepared with this recompiler, turn off Apply to Unsupported Games** in **Settings → Screen and Video → Video Output**, under **VRR**. Forced VRR can cause brightness flicker or make the runtime fall back to 60 Hz even when a 120 Hz profile is selected. You can keep the main VRR setting on **Automatic** for profiles that explicitly enable VRR. Relaunch the game after changing this setting. [PlayStation video output settings](https://www.playstation.com/en-us/support/hardware/ps5-4k-resolution-guide/)
+
 - Add `--display-mode 120hz` to request high-refresh output, or `--display-mode 120hz-vrr` to also opt in to variable refresh. The staging tool sets the matching `param.json` flags and a 120 FPS limit in the local profile. A compatible title, PS5 output setting and display are required. VideoOut reports the selected mode in `RECOMPILER_DISPLAY_MODE`, and `RECOMPILER_CADENCE` counts guest presents separately from overlays. The target can fall back to standard refresh if the higher mode is unavailable. Game frame rates depend on the title and workload.
 - The native pad handler enables DualSense accelerometer and gyro input and maps the samples to PS3 Sixaxis channels. Guest support determines when the sensors and rumble are used.
 - Add `--spu-hybrid` to keep LLVM SPU preparation and allow AsmJit to handle live SPU cache misses. The persistent caches remain local. Shader warmup prepares known Vulkan pipeline variants in parallel within a bounded queue. Scenes with previously unseen shader states can still need runtime compilation.
