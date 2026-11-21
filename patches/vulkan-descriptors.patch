@@ -1,0 +1,63 @@
+diff --git a/rpcs3/Emu/RSX/VK/vkutils/descriptors.cpp b/rpcs3/Emu/RSX/VK/vkutils/descriptors.cpp
+--- a/rpcs3/Emu/RSX/VK/vkutils/descriptors.cpp
++++ b/rpcs3/Emu/RSX/VK/vkutils/descriptors.cpp
+@@ -1,9 +1,29 @@
+ #include "Emu/IdManager.h"
+ #include "descriptors.h"
++#include "descriptor_sampler_fix.h"
++#include "scratch.h"
+ #include "garbage_collector.h"
+ 
+ namespace vk
+ {
++	static void update_descriptors(std::span<const VkWriteDescriptorSet> writes,
++		u32 num_copies, const VkCopyDescriptorSet* copies)
++	{
++		descriptor_sampler::submit(writes, []
++		{
++			static atomic_t<bool> reported = false;
++			if (!reported.exchange(true))
++				rsx_log.warning("RECOMPILER_VK_DESCRIPTOR: using placeholder for missing sampler");
++			return vk::null_sampler();
++		}, [](u32 binding, u32 element)
++		{
++			fmt::throw_exception("RECOMPILER_VK_DESCRIPTOR: incomplete image or sampler at binding %u element %u", binding, element);
++		}, [&](std::span<const VkWriteDescriptorSet> valid)
++		{
++			vkUpdateDescriptorSets(*g_render_device, static_cast<u32>(valid.size()), valid.data(), num_copies, copies);
++		});
++	}
++
+ 	// Error handler callback
+ 	extern void on_descriptor_pool_fragmentation(bool fatal);
+ 
+@@ -458,7 +478,7 @@
+ 			nullptr,                                   // pBufferInfo
+ 			nullptr                                    // pTexelBufferView
+ 		};
+-		vkUpdateDescriptorSets(*g_render_device, 1, &writer, 0, nullptr);
++		update_descriptors({&writer, 1}, 0, nullptr);
+ 	}
+ 
+ 	void descriptor_set::push(const rsx::simple_array<VkCopyDescriptorSet>& copy_cmd, u32 type_mask)
+@@ -526,7 +546,7 @@
+ 
+ 		const auto num_writes = ::size32(m_pending_writes);
+ 		const auto num_copies = ::size32(m_pending_copies);
+-		vkUpdateDescriptorSets(*g_render_device, num_writes, m_pending_writes.data(), num_copies, m_pending_copies.data());
++		update_descriptors({m_pending_writes.data(), num_writes}, num_copies, m_pending_copies.data());
+ 
+ 		m_storage_cache_id++;
+ 
+diff --git a/rpcs3/Emu/RSX/VK/vkutils/scratch.cpp b/rpcs3/Emu/RSX/VK/vkutils/scratch.cpp
+--- a/rpcs3/Emu/RSX/VK/vkutils/scratch.cpp
++++ b/rpcs3/Emu/RSX/VK/vkutils/scratch.cpp
+@@ -50,7 +50,7 @@
+ 		sampler_info.compareOp = VK_COMPARE_OP_NEVER;
+ 		sampler_info.borderColor = VK_BORDER_COLOR_FLOAT_OPAQUE_WHITE;
+ 
+-		vkCreateSampler(*g_render_device, &sampler_info, nullptr, &g_null_sampler);
++		CHECK_RESULT(vkCreateSampler(*g_render_device, &sampler_info, nullptr, &g_null_sampler));
+ 		return g_null_sampler;
+ 	}
+ 

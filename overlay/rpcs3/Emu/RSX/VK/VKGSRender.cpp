@@ -1799,7 +1799,8 @@ bool VKGSRender::load_program()
 	// TODO: EXT_dynamic_state should get rid of this sillyness soon (kd)
 	const auto vertex_state = vk::decode_vertex_input_assembly_state();
 
-	if (m_graphics_state & rsx::pipeline_state::invalidate_pipeline_bits)
+	const bool shader_dirty = !!(m_graphics_state & rsx::pipeline_state::invalidate_pipeline_bits);
+	if (shader_dirty)
 	{
 		get_current_fragment_program(fs_sampler_state);
 		ensure(current_fragment_program.valid);
@@ -1847,11 +1848,11 @@ bool VKGSRender::load_program()
 		);
 
 		properties.renderpass_key = m_current_renderpass_key;
-		if (m_program &&
+		if (!shader_dirty && m_program &&
 			!m_shader_interpreter.is_interpreter(m_program) &&
 			m_pipeline_properties == properties)
 		{
-			// Nothing changed
+			m_graphics_state.clear(rsx::pipeline_state::pipeline_config_dirty);
 			return true;
 		}
 

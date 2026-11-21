@@ -4,7 +4,7 @@
 
 PS3 TO PS5 LLVM RPCS3 RECOMPILER boots a local PS3 disc dump directly with a PS5 build of the RPCS3 runtime. It uses LLVM for PPU and SPU code and the native Vulkan backend for RSX graphics. The profile keeps RPCS3's default GPU settings, including resolution scale, frame limit and VBlank. Vulkan and the PS5 audio backend are selected for the target.
 
-The Vulkan changes include the interpreter's base pipeline catalogue, parallel preparation, shared driver caching, device-checked dynamic states, depth and feedback passes, and retry of pending texture uploads. LLVM and Vulkan caches are built locally and reused on later launches. A new game or driver can still require compilation. Compatibility and timing depend on the game and need to be tested on the target.
+The Vulkan changes include the interpreter's base pipeline catalogue, parallel preparation, shared driver caching, device-checked dynamic states, depth and feedback passes, and retry of pending texture uploads. The warmup journal now retains up to 32 slow pipeline states, including multisampled states supported by the active device, so those pipelines can be prepared before gameplay on later launches. It reads existing v1 journals, and LLVM and Vulkan caches are reused. A new game, render state, or driver can still require compilation.
 
 ## Prepare a disc
 
@@ -22,15 +22,16 @@ python tools/prepare_dump.py stage \
 
 Use a `param.json` from the local package for the target PS5 homebrew title and its matching platform modules. The tool sets the display name to **PS3 TO PS5 LLVM RPCS3 RECOMPILER** in each locale and preserves the package identifiers. `templates/param.json` shows the name fields with placeholder IDs. Keep platform modules supplied by the native build in `sce_module/` when needed. Run the resulting directory with your PS5 homebrew environment.
 
-The package uses the RPCS3 icon by default. Pass `--icon0 path/to/icon.png` to replace the icon and `--pic0 path/to/background.png` to add a background. These options only change the local output directory.
+The package uses the RPCS3 icon by default. Pass `--icon0 path/to/icon.png` to use a custom square PNG. Pass `--pic0 selection.dds` and optionally `--pic1 launch.dds` to set the PS5 menu and launch artwork. Use 3840×2160 BC7_UNORM DDS textures with the DX10 header and one mip level. The legacy PNG input for `--pic0` is still accepted. RPCS3 reads any per-language `PIC0_XX.PNG` overlays from the original `PS3_GAME` folder when showing its compilation screen.
 
 ## Display, controller and SPU options
 
 **For all games prepared with this recompiler, turn off Apply to Unsupported Games** in **Settings → Screen and Video → Video Output**, under **VRR**. Forced VRR can cause brightness flicker or make the runtime fall back to 60 Hz even when a 120 Hz profile is selected. You can keep the main VRR setting on **Automatic** for profiles that explicitly enable VRR. Relaunch the game after changing this setting. [PlayStation video output settings](https://www.playstation.com/en-us/support/hardware/ps5-4k-resolution-guide/)
 
 - Add `--display-mode 120hz` to request high-refresh output, or `--display-mode 120hz-vrr` to also opt in to variable refresh. The staging tool sets the matching `param.json` flags and a 120 FPS limit in the local profile. A compatible title, PS5 output setting and display are required. VideoOut reports the selected mode in `RECOMPILER_DISPLAY_MODE`, and `RECOMPILER_CADENCE` counts guest presents separately from overlays. The target can fall back to standard refresh if the higher mode is unavailable. Game frame rates depend on the title and workload.
-- The native pad handler enables DualSense accelerometer and gyro input and maps the samples to PS3 Sixaxis channels. Guest support determines when the sensors and rumble are used.
+- The native pad handler maps DualSense accelerometer and gyro samples to PS3 Sixaxis channels when the system exposes the motion API. Buttons and sticks remain available on systems where that API is absent. Guest support determines when the sensors and rumble are used.
 - Add `--spu-hybrid` to keep LLVM SPU preparation and allow AsmJit to handle live SPU cache misses. The persistent caches remain local. Shader warmup prepares known Vulkan pipeline variants in parallel within a bounded queue. Scenes with previously unseen shader states can still need runtime compilation.
+- Use `--spu-async` for the experimental PS5 background SPU profile with the LLVM decoder. A new block starts in the x86-64 interpreter tier while a single low-priority LLVM worker builds the optimized block. The runtime records the first queued block and the first successful handoff under `SPU background JIT`. This option applies to both graphics profiles. The Android implementation inspired this workflow. [ARMSX3 background SPU compilation](https://github.com/ARMSX2/ARMSX3/commit/ab79c1ecef2686acd065a59a31fe655e4758ca42)
 
 The standard GPU profile is the default. To select a separate display or graphics profile explicitly, place `ps5-pro.enable` alongside `rpcs3-recompiler-pro.yml` in the title folder. This is a manual choice. Use the same frame-limit and display metadata settings if you want the same refresh behavior in both profiles.
 
@@ -42,6 +43,12 @@ The standard GPU profile is the default. To select a separate display or graphic
 4. Launch the disc. RPCS3 detects an update using the matching title ID and the installed update's `PARAM.SFO` and `USRDIR/EBOOT.BIN`. The guest game looks up DLC in its installed data.
 
 Cache and logs are kept under `/data/rpcs3-recompiler`. Keep the cache between runs to reuse work. The exact shader states, scene data, patches and DLC manifests for individual games belong to local title profiles.
+
+### Clear a title cache
+
+Create an empty `clear-cache.enable` next to `eboot.bin` and start the title once. The runtime reads the disc ID, acquires the runtime lock and removes that title's cache under `cache/cache/<PS3 title ID>`. On completion, it reports `RECOMPILER_CACHE_CLEANUP` and exits. Remove the marker before starting the game again. Other title directories, saved data, installs, DLC and shared compiler caches are preserved. If the launcher denies access to the optional marker, normal boot continues and the cache is preserved.
+
+For graphics diagnostics, `RECOMPILER_SHADER_WARMUP` reports prepared and reused pipeline states. `RECOMPILER_FRAME_QUEUE` times submission, presentation, command-buffer reuse and frame retirement on slow frames. When rolling back to v0.2, that version can ignore a journal with more than eight entries. Existing LLVM and Vulkan caches can still be reused.
 
 ### Optional single-file disc update
 
@@ -90,10 +97,22 @@ cmake --build build/ps5 --target rpcs3
 
 Pass the native ELF to the application packaging tools provided by your target environment. Use the resulting `eboot.bin` with the staging command above.
 
+### Firmware compatibility
+
+The core uses one Vulkan renderer across firmware versions. It fills the shader's declared texture slots, checks mutable samplers and preserves device features when optional fault diagnostics are enabled. The controller enables motion when the system provides the sensor API. A missing API leaves buttons and sticks available.
+
+A 4.50 retail sample is the current comparison target. Run this check on the converted native ELF before adapting another game. It records the firmware release and module hashes and returns a nonzero exit status for newly required native calls or modules. A console run is still required to verify graphics, controller input and gameplay on a given firmware.
+
+```sh
+python3 tools/compare_firmware.py --candidate build/game.sce.elf \
+  --baseline known-build/game.sce.elf --firmware /path/to/local/firmware-sample
+```
+
 ## Credits
 
 - The **RPCS3 team and contributors** developed the emulator core, the PPU and SPU recompilers, the RSX implementation, and the Vulkan shader interpreter. The default app icon uses the RPCS3 logo. [RPCS3](https://github.com/RPCS3/rpcs3) · [Contributors](https://github.com/RPCS3/rpcs3/graphs/contributors)
 - The **LLVM Project contributors** developed the compiler backend. The native build uses the PS5 LLVM port maintained by **lavavex**. [LLVM](https://llvm.org/) · [PS5 LLVM](https://github.com/lavavex/PS5_LLVM)
+- The **ARMSX3 contributors** shared the background SPU compilation approach. [ARMSX3](https://github.com/ARMSX2/ARMSX3)
 - The **Mesa contributors** developed the RADV driver. **mihawk-99** and the contributors to PS5 Vulkan and PS5 Mesa provide the native graphics integration. [Mesa](https://www.mesa3d.org/) · [PS5 Vulkan](https://github.com/mihawk-99/PS5_Vulkan) · [PS5 Mesa](https://github.com/mihawk-99/PS5_Mesa)
 - **The Khronos Group** maintains the Vulkan headers. **Arseny Kapoulkine** and contributors maintain volk, the Vulkan loader helper. [Vulkan Headers](https://github.com/KhronosGroup/Vulkan-Headers) · [volk](https://github.com/zeux/volk)
 - The **PS5 Payload SDK**, **Qt**, and **FFmpeg** contributors provide tooling, the application framework, and media support. [PS5 Payload SDK](https://github.com/ps5-payload-dev/sdk) · [Qt](https://www.qt.io/) · [FFmpeg](https://ffmpeg.org/)

@@ -664,25 +664,18 @@ bool VKGSRender::bind_texture_env()
 {
 	bool out_of_memory = false;
 
-	for (u32 textures_ref = current_fp_metadata.referenced_textures_mask, i = 0; textures_ref; textures_ref >>= 1, ++i)
+	// Fill the compiled layout. An undeclared slot must not prevent later bindings.
+	for (u32 i = 0; i < std::size(m_fs_binding_table->ftex_location); ++i)
 	{
-		if (!(textures_ref & 1))
-		{
-			// Unused TIU
-			continue;
-		}
-
 		if (m_fs_binding_table->ftex_location[i] == umax)
-		{
-			// Corrupt shader table
-			break;
-		}
+			continue;
+		const auto stencil_binding = m_fs_binding_table->ftex_stencil_location[i];
 
 		vk::image_view* view = nullptr;
 		auto sampler_state = static_cast<vk::texture_cache::sampled_image_descriptor*>(fs_sampler_state[i].get());
 
 		if (rsx::method_registers.fragment_textures[i].enabled() &&
-			sampler_state->validate())
+			sampler_state && sampler_state->validate())
 		{
 			if (view = sampler_state->image_handle; !view)
 			{
@@ -698,13 +691,13 @@ bool VKGSRender::bind_texture_env()
 			}
 		}
 
-		if (view) [[likely]]
+		if (view && fs_sampler_handles[i]) [[likely]]
 		{
 			m_program->bind_uniform({ *view, *fs_sampler_handles[i] },
 				vk::glsl::binding_set_index_fragment,
 				m_fs_binding_table->ftex_location[i]);
 
-			if (current_fragment_program.texture_state.redirected_textures & (1 << i))
+			if (stencil_binding != umax && (current_fragment_program.texture_state.redirected_textures & (1u << i)))
 			{
 				// Stencil mirror required
 				auto root_image = static_cast<vk::viewable_image*>(view->image());
@@ -723,7 +716,13 @@ bool VKGSRender::bind_texture_env()
 
 				m_program->bind_uniform({ *stencil_view, *m_stencil_mirror_sampler },
 					vk::glsl::binding_set_index_fragment,
-					m_fs_binding_table->ftex_stencil_location[i]);
+					stencil_binding);
+			}
+			else if (stencil_binding != umax)
+			{
+				const auto view_type = vk::get_view_type(current_fragment_program.get_texture_dimension(i));
+				m_program->bind_uniform({ *vk::null_image_view(*m_current_command_buffer, view_type), vk::null_sampler() },
+					vk::glsl::binding_set_index_fragment, stencil_binding);
 			}
 		}
 		else
@@ -734,30 +733,19 @@ bool VKGSRender::bind_texture_env()
 				vk::glsl::binding_set_index_fragment,
 				m_fs_binding_table->ftex_location[i]);
 
-			if (current_fragment_program.texture_state.redirected_textures & (1 << i))
+			if (stencil_binding != umax)
 			{
-				m_program->bind_uniform(desc,
-					vk::glsl::binding_set_index_fragment,
-					m_fs_binding_table->ftex_stencil_location[i]);
+				m_program->bind_uniform(desc, vk::glsl::binding_set_index_fragment, stencil_binding);
 			}
 		}
 	}
 
-	for (u32 textures_ref = current_vp_metadata.referenced_textures_mask, i = 0; textures_ref; textures_ref >>= 1, ++i)
+	for (u32 i = 0; i < std::size(m_vs_binding_table->vtex_location); ++i)
 	{
-		if (!(textures_ref & 1))
-		{
-			// Unused TIU
-			continue;
-		}
-
 		if (m_vs_binding_table->vtex_location[i] == umax)
-		{
-			// Corrupt shader
-			break;
-		}
+			continue;
 
-		if (!rsx::method_registers.vertex_textures[i].enabled())
+		if (!rsx::method_registers.vertex_textures[i].enabled() || !vs_sampler_state[i] || !vs_sampler_handles[i])
 		{
 			const auto view_type = vk::get_view_type(current_vertex_program.get_texture_dimension(i));
 			m_program->bind_uniform({ *vk::null_image_view(*m_current_command_buffer, view_type), vk::null_sampler() },
@@ -797,7 +785,7 @@ bool VKGSRender::bind_texture_env()
 			m_vs_binding_table->vtex_location[i]);
 	}
 
-	if (current_fragment_program.ctrl & RSX_SHADER_CONTROL_EMULATE_DEPTH_COMPARE)
+	if (m_fs_binding_table->frag_depth_input_location != umax)
 	{
 		auto ds = ensure(m_rtts.m_bound_depth_stencil.second);
 		auto view = ds->get_view(rsx::default_remap_vector, VK_IMAGE_ASPECT_DEPTH_BIT);

@@ -8,6 +8,7 @@
 #include "Utilities/File.h"
 
 #include <bit>
+#include <cmath>
 
 namespace vk::recompiler_warmup
 {
@@ -54,6 +55,7 @@ namespace vk::recompiler_warmup
 	inline bool valid_record(const record& data, const vk::render_device& device)
 	{
 		constexpr u64 valid_options = COMPILER_OPT_ALL_VS_MASK | COMPILER_OPT_ALL_FS_MASK;
+		const auto samples = data.multisample.rasterizationSamples;
 		if ((data.options & ~valid_options) || std::popcount(data.options & COMPILER_OPT_ALPHA_TEST_MASK) > 1 ||
 			data.blend.attachmentCount > 4 || data.input.pNext || data.depth.pNext || data.blend.pNext ||
 			data.raster.pNext || data.multisample.pNext || data.blend.pAttachments || data.multisample.pSampleMask ||
@@ -62,7 +64,7 @@ namespace vk::recompiler_warmup
 			data.blend.sType != VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO ||
 			data.raster.sType != VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO ||
 			data.multisample.sType != VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO ||
-			data.multisample.rasterizationSamples != VK_SAMPLE_COUNT_1_BIT || ((data.renderpass >> 16) & 0x3f) != 1 ||
+			!recompiler_shader_warmup::sample_count_matches(data.renderpass, samples) ||
 			(data.renderpass >> 37) || (data.depth.depthBoundsTestEnable && !device.get_depth_bounds_support()))
 		{
 			return false;
@@ -79,6 +81,22 @@ namespace vk::recompiler_warmup
 		if ((data.blend.attachmentCount > 0) != (color != VK_FORMAT_UNDEFINED) ||
 			(color == VK_FORMAT_UNDEFINED && depth == VK_FORMAT_UNDEFINED))
 			return false;
+		if (samples != VK_SAMPLE_COUNT_1_BIT)
+		{
+			const auto& gpu = device.gpu();
+			const auto& limits = gpu.get_limits();
+			VkPhysicalDeviceFeatures features{};
+			vkGetPhysicalDeviceFeatures(gpu, &features);
+			if (g_cfg.video.antialiasing_level == msaa_level::none ||
+				(color != VK_FORMAT_UNDEFINED && !(limits.framebufferColorSampleCounts & samples)) ||
+				(depth != VK_FORMAT_UNDEFINED && (!(limits.framebufferDepthSampleCounts & samples) ||
+					!(limits.framebufferStencilSampleCounts & samples))) ||
+				(data.multisample.sampleShadingEnable && !features.sampleRateShading) ||
+				(data.multisample.alphaToOneEnable && !device.get_alpha_to_one_support()) ||
+				!std::isfinite(data.multisample.minSampleShading) || data.multisample.minSampleShading < 0.f ||
+				data.multisample.minSampleShading > 1.f)
+				return false;
+		}
 		for (unsigned i = 0; i < 5; ++i)
 		{
 			const u64 layout = (data.renderpass >> (22 + 3 * i)) & 7;
@@ -109,6 +127,7 @@ namespace vk::recompiler_warmup
 		data.blend.pAttachments = nullptr;
 		data.raster = props.state.rs;
 		data.multisample = props.state.ms;
+		data.multisample.pSampleMask = nullptr;
 		data.sample_mask = props.state.temp_storage.msaa_sample_mask;
 		return data;
 	}

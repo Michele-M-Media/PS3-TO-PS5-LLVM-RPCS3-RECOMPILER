@@ -1,0 +1,87 @@
+diff --git a/rpcs3/Emu/Cell/SPUCommonRecompiler.cpp b/rpcs3/Emu/Cell/SPUCommonRecompiler.cpp
+--- a/rpcs3/Emu/Cell/SPUCommonRecompiler.cpp
++++ b/rpcs3/Emu/Cell/SPUCommonRecompiler.cpp
+@@ -1,5 +1,6 @@
+ #include "stdafx.h"
+ #include "SPURecompiler.h"
++#include "recompiler_spu_async.h"
+ 
+ #include "Emu/System.h"
+ #include "Emu/system_config.h"
+@@ -9025,6 +9026,12 @@
+ 
+ 	void operator()()
+ 	{
++#if defined(RPCS3_PS5) && defined(ARCH_X64)
++		const bool background = recompiler::spu_async::ps5_mode() == recompiler::spu_async::mode::background;
++		std::optional<thread_ctrl::scoped_priority> background_priority;
++		if (background)
++			background_priority.emplace(-1);
++#endif
+ 		// SPU LLVM Recompiler instance
+ 		std::unique_ptr<spu_recompiler_base> compiler;
+ 
+@@ -9123,6 +9130,14 @@
+ 				// Redirect old function (TODO: patch in multiple places)
+ 				const s64 rel = reinterpret_cast<u64>(target) - prog->first - 5;
+ 
++#if defined(RPCS3_PS5) && defined(ARCH_X64)
++				if (background && !recompiler::spu_async::valid_redirect(rel))
++				{
++					spu_log.warning("SPU background JIT: entry redirect out of range at 0x%05x", func.entry_point);
++					std::memset(ls.data() + start / 4, 0, sizeof(be_t<u32>) * size0);
++					continue;
++				}
++#endif
+ 				union
+ 				{
+ 					u8 bytes[8];
+@@ -9136,10 +9151,15 @@
+ 				bytes[7] = 0x90;
+ 
+ 				atomic_storage<u64>::release(*reinterpret_cast<u64*>(prog->first), result);
+-			}
+-
+-			// Clear fake LS
+-			std::memset(ls.data() + start / 4, 0, 4 * (size0 - 1));
++#if defined(RPCS3_PS5) && defined(ARCH_X64)
++				static atomic_t<bool> reported{false};
++				if (background && !reported.exchange(true))
++					spu_log.notice("SPU background JIT: first interpreter entry promoted at 0x%05x", func.entry_point);
++#endif
++			}
++
++			// Clear the entire scratch local-store range after analysing the block.
++			std::memset(ls.data() + start / 4, 0, sizeof(be_t<u32>) * size0);
+ 		}
+ 
+ 		if (set_relax_flag)
+@@ -9237,6 +9257,13 @@
+ 		{
+ 			worker_count = 2;
+ 		}
++
++#if defined(RPCS3_PS5) && defined(ARCH_X64)
++		const auto selected = recompiler::spu_async::ps5_mode();
++		worker_count = recompiler::spu_async::workers(selected, worker_count);
++		if (selected == recompiler::spu_async::mode::background)
++			spu_log.notice("SPU background JIT: %u LLVM worker", worker_count);
++#endif
+ 
+ 		u32 worker_index = 0;
+ 		u32 notify_compile_count = 0;
+@@ -9718,8 +9745,13 @@
+ 		}
+ 		else if (added)
+ 		{
+-			// Send work to LLVM compiler thread
++			// The first tier can execute while the LLVM worker prepares the block.
+ 			g_fxo->get<spu_llvm_thread>().registered.push(m_hash_start, add_loc);
++#if defined(RPCS3_PS5) && defined(ARCH_X64)
++			static atomic_t<bool> reported{false};
++			if (recompiler::spu_async::ps5_mode() == recompiler::spu_async::mode::background && !reported.exchange(true))
++				spu_log.notice("SPU background JIT: first cold block queued at 0x%05x", func.entry_point);
++#endif
+ 		}
+ 
+ 		// Rebuild trampoline if necessary

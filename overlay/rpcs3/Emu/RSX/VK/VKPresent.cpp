@@ -229,6 +229,7 @@ void VKGSRender::advance_queued_frames()
 
 void VKGSRender::queue_swap_request()
 {
+	const auto queue_start = frame_clock::now();
 	ensure(!m_current_frame->swap_command_buffer);
 	m_current_frame->swap_command_buffer = m_current_command_buffer;
 
@@ -246,15 +247,25 @@ void VKGSRender::queue_swap_request()
 	}
 
 	// Set up a present request for this frame as well
+	const auto submit_end = frame_clock::now();
 	present(m_current_frame);
+	const auto present_end = frame_clock::now();
 
 	// Grab next cb in line and make it usable
 	m_current_command_buffer = m_primary_cb_list.next();
 	m_current_command_buffer->reset();
 	m_current_command_buffer->begin();
+	const auto recycle_end = frame_clock::now();
 
 	// Set up new pointers for the next frame
 	advance_queued_frames();
+	const auto retire_end = frame_clock::now();
+	if (frame_elapsed_us(queue_start, retire_end) >= 20'000)
+	{
+		rsx_log.notice("RECOMPILER_FRAME_QUEUE: submit_us=%lld present_phase_us=%lld recycle_us=%lld retire_us=%lld",
+			frame_elapsed_us(queue_start, submit_end), frame_elapsed_us(submit_end, present_end),
+			frame_elapsed_us(present_end, recycle_end), frame_elapsed_us(recycle_end, retire_end));
+	}
 }
 
 void VKGSRender::frame_context_cleanup(vk::frame_context_t *ctx)

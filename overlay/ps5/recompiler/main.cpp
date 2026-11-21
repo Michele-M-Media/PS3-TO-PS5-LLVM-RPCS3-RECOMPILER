@@ -23,7 +23,9 @@
 #include "rpcs3qt/localized_emu.h"
 #include "util/video_source.h"
 #include "Utilities/File.h"
+#include "Loader/PSF.h"
 #include "util/yaml.hpp"
+#include "recompiler_cache_cleanup.h"
 #include "recompiler_system_language.h"
 #if __has_include("recompiler_title_update_manifest.h")
 #include "recompiler_title_update.h"
@@ -332,6 +334,23 @@ int main()
     std::fprintf(stderr, "RECOMPILER_GRAPHICS_PROFILE: %s\n", pro_profile ? "pro" : "base");
     fs::file lock(fs::get_cache_dir()+"recompiler-core.lock",fs::rewrite+fs::lock);
     if (!lock) return 72;
+    const auto cleanup = recompiler_cache_cleanup::run(app, data, [&]
+    {
+        const auto fields = psf::load_object(std::string(app) + "/PS3_GAME/PARAM.SFO");
+        return std::string(psf::get_string(fields, "TITLE_ID", ""));
+    });
+    if (cleanup.state == recompiler_cache_cleanup::status::request_unavailable)
+        std::fprintf(stderr, "RECOMPILER_CACHE_CLEANUP: optional marker unavailable errno=%d; continuing boot\n", cleanup.error.value());
+    if (cleanup.state == recompiler_cache_cleanup::status::complete)
+    {
+        std::fprintf(stderr, "RECOMPILER_CACHE_CLEANUP: complete removed=%ju\n", cleanup.removed);
+        return 0;
+    }
+    if (cleanup.state == recompiler_cache_cleanup::status::failed)
+    {
+        std::fprintf(stderr, "RECOMPILER_CACHE_CLEANUP: failed errno=%d\n", cleanup.error.value());
+        return 76;
+    }
     if (const int error = recompiler_rpcs3_prepare_vfs(data, app)) return error;
     const auto memory_stage=[](const char* stage) {
         struct ps5_heap_stats state{};

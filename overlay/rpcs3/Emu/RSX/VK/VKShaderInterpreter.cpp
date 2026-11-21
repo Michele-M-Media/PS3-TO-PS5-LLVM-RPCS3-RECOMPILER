@@ -1026,6 +1026,11 @@ namespace vk
 		rsx_log.notice("RECOMPILER_WARMUP_PARALLEL: jobs=%u completed=%u limit=%u", jobs_total, prepared->load(), warmup_pending_limit);
 		rsx_log.notice("RECOMPILER_SHADER_FEEDBACK_PRELOAD: paired=%u prepared=%u",
 			paired, ::size32(title_warmup.warmed));
-		rsx_log.notice("RECOMPILER_SHADER_WARMUP: startup recorded=%u compiled=%u", total, prepared->load());
+		const auto multisampled = std::count_if(title_warmup.warmed.begin(), title_warmup.warmed.end(), [](const recompiler_warmup::record& item)
+		{
+			return item.multisample.rasterizationSamples != VK_SAMPLE_COUNT_1_BIT;
+		});
+		rsx_log.notice("RECOMPILER_SHADER_WARMUP: startup recorded=%u compiled=%u multisample_ready=%u",
+			total, prepared->load(), static_cast<u32>(multisampled));
 	}
 };

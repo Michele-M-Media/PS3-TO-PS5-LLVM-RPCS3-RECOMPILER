@@ -10,6 +10,13 @@
 
 namespace ps5
 {
+	inline std::optional<int> enable_motion(int32_t handle)
+	{
+		if (scePadSetMotionSensorState)
+			return scePadSetMotionSensorState(handle, true);
+		return std::nullopt;
+	}
+
 	// The native packet uses g and rad/s. Follow the existing RPCS3 DualSense
 	// mapping into the DS3 axes, with only the Y (yaw) gyro exposed by cellPad.
 	inline std::optional<std::array<uint16_t, 4>> sixaxis(const pad_sample& sample, float one_g)

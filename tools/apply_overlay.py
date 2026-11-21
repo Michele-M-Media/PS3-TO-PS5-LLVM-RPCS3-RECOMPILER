@@ -24,7 +24,9 @@ def apply(root, update_manifest=None):
         raise ValueError(f"Use the RPCS3 checkout at {REVISION}")
     if git(root, "status", "--porcelain"):
         raise ValueError("Use a clean checkout")
-    patches = [str(PROJECT / "patches" / name) for name in ("native-platform.patch", "spu-hybrid.patch")]
+    patches = [str(PROJECT / "patches" / name) for name in
+               ("native-platform.patch", "spu-hybrid.patch", "spu-async-worker.patch",
+                "vulkan-descriptors.patch")]
     git(root, "apply", "--check", *patches)
     git(root, "apply", *patches)
     shutil.copytree(PROJECT / "overlay", root, dirs_exist_ok=True)

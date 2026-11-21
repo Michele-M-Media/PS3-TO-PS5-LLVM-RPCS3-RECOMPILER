@@ -25,7 +25,7 @@ extern "C"
 	int scePadGetHandle(int32_t user_id, int32_t port_type, int32_t index);
 	int scePadRead(int32_t handle, void* samples, int32_t capacity);
 	int scePadClose(int32_t handle);
-	int scePadSetMotionSensorState(int32_t handle, bool enable);
+	int scePadSetMotionSensorState(int32_t handle, bool enable) __attribute__((weak));
 	int scePadSetVibrationMode(int32_t handle, int32_t mode);
 	int scePadSetVibration(int32_t handle, const void* vibration);
 	int scePadSetLightBar(int32_t handle, const void* color);

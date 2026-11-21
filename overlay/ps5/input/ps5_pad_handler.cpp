@@ -260,13 +260,15 @@ PadHandlerBase::connection ps5_pad_handler::update_connection(const std::shared_
 
 	if (reconnected)
 	{
-		const int result = scePadSetMotionSensorState(dev->handle, true);
+		const auto result = ps5::enable_motion(dev->handle);
 		dev->motion_enabled = result == 0;
 		dev->motion_reported = false;
 		if (dev->motion_enabled)
 			ps5_pad_log.notice("RECOMPILER_SIXAXIS: native motion enabled");
+		else if (!result)
+			ps5_pad_log.warning("RECOMPILER_SIXAXIS: motion API unavailable on this system");
 		else
-			ps5_pad_log.warning("RECOMPILER_SIXAXIS: native enable failed (0x%x)", result);
+			ps5_pad_log.warning("RECOMPILER_SIXAXIS: native enable failed (0x%x)", *result);
 	}
 
 	if (s.buttons & ps5::PAD_INTERCEPTED)

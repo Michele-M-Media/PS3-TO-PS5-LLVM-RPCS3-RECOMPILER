@@ -12,7 +12,7 @@
 
 namespace recompiler_shader_warmup
 {
-	constexpr std::uint32_t capacity = 8;
+	constexpr std::uint32_t capacity = 32;
 	constexpr std::int64_t learn_threshold_us = 50'000;
 	using profile = std::array<std::uint32_t, 8>;
 
@@ -27,6 +27,13 @@ namespace recompiler_shader_warmup
 
 	constexpr std::uint64_t magic = 0x31574d4952534141ULL;
 	static_assert(sizeof(file_header) == 56);
+
+	constexpr bool sample_count_matches(std::uint64_t renderpass, std::uint32_t samples)
+	{
+		// The Vulkan render pass encoder stores 1x, 2x, 4x or 8x in this field.
+		return (samples == 1 || samples == 2 || samples == 4 || samples == 8) &&
+			((renderpass >> 16) & 0x3f) == samples;
+	}
 
 	inline std::uint64_t checksum(std::span<const std::byte> data)
 	{

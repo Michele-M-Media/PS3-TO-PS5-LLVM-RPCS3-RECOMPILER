@@ -74,6 +74,19 @@ def png(path):
     return path
 
 
+def dds_background(path):
+    with path.open("rb") as file:
+        header = file.read(148)
+    if (len(header) != 148 or header[:4] != b"DDS " or header[84:88] != b"DX10"
+            or struct.unpack_from("<I", header, 4) != (124,)
+            or struct.unpack_from("<II", header, 12) != (2160, 3840)
+            or struct.unpack_from("<I", header, 28)[0] not in (0, 1)
+            or struct.unpack_from("<IIII", header, 128) != (98, 3, 0, 1)
+            or path.stat().st_size != 148 + 3840 * 2160):
+        raise ValueError(f"Expected a single-level 3840x2160 BC7_UNORM DX10 DDS: {path}")
+    return path
+
+
 def stage(args):
     disc, output = args.disc.resolve(strict=True), args.output.resolve()
     info = inspect(disc)
@@ -85,7 +98,10 @@ def stage(args):
         raise ValueError("Select the dev_flash directory from your local RPCS3 firmware installation")
     metadata = native_metadata(args.param, args.display_mode)
     icon = png(args.icon0 or TEMPLATE.with_name("icon0.png"))
-    background = png(args.pic0) if args.pic0 else None
+    background = None
+    if args.pic0:
+        background = dds_background(args.pic0) if args.pic0.suffix.lower() == ".dds" else png(args.pic0)
+    splash = dds_background(args.pic1) if args.pic1 else None
     if output.is_relative_to(disc) or output.is_relative_to(firmware):
         raise ValueError("Choose an output directory outside the input directories")
     # Reserve the destination once so retries cannot overwrite an existing dump.
@@ -98,12 +114,16 @@ def stage(args):
     if args.display_mode != "default":
         config = config.replace("  Renderer: Vulkan\n", "  Renderer: Vulkan\n  Frame limit: 120\n", 1)
     (output / TEMPLATE.name).write_text(config, encoding="utf-8", newline="\n")
-    if args.spu_hybrid:
+    if args.spu_async:
+        (output / "spu-async.enable").touch()
+    elif args.spu_hybrid:
         (output / "spu-hybrid.enable").touch()
     (output / "sce_sys").mkdir()
     shutil.copyfile(icon, output / "sce_sys/icon0.png")
     if background:
-        shutil.copyfile(background, output / "sce_sys/pic0.png")
+        shutil.copyfile(background, output / ("sce_sys/pic0.dds" if background.suffix.lower() == ".dds" else "sce_sys/pic0.png"))
+    if splash:
+        shutil.copyfile(splash, output / "sce_sys/pic1.dds")
     modules = core.parent / "sce_module"
     if modules.is_dir():
         shutil.copytree(modules, output / "sce_module")
@@ -121,10 +141,13 @@ def main():
     for name in ("disc", "output", "core", "param", "firmware"):
         build.add_argument("--" + name, type=Path, required=True)
     build.add_argument("--icon0", type=Path, help="Override the default RPCS3 icon")
-    build.add_argument("--pic0", type=Path, help="Use a custom background")
+    build.add_argument("--pic0", type=Path, help="Use a 4K BC7 DDS selection background or a legacy PNG")
+    build.add_argument("--pic1", type=Path, help="Use a 4K BC7 DDS launch image")
     build.add_argument("--display-mode", choices=("default", "120hz", "120hz-vrr"), default="default",
                        help="Select a high-refresh profile for a compatible game and display")
-    build.add_argument("--spu-hybrid", action="store_true", help="Allow AsmJit on live SPU cache misses")
+    spu = build.add_mutually_exclusive_group()
+    spu.add_argument("--spu-hybrid", action="store_true", help="Allow AsmJit on live SPU cache misses")
+    spu.add_argument("--spu-async", action="store_true", help="Run the SPU fast tier while LLVM compiles cold blocks")
     args = parser.parse_args()
     try:
         info = inspect(args.disc) if args.command == "inspect" else stage(args)

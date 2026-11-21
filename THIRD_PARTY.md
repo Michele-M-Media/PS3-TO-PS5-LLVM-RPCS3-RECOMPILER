@@ -13,4 +13,4 @@ The default icon uses the [RPCS3 logo](https://github.com/RPCS3/rpcs3/blob/ca3e5
 
 The LLVM target selector retains [LLVM's Apache 2.0 license with LLVM exceptions](licenses/LLVM-LICENSE.txt). The external SDK, Qt, FFmpeg and the other build inputs retain the terms provided with their own source trees. This repository distributes source changes. Review the complete dependency terms before redistributing linked binaries.
 
-The [VideoOut patch](patches/mesa-videoout.patch) applies to the pinned PS5 Mesa source above and keeps its MIT terms. The SPU hybrid path uses [AsmJit](https://github.com/asmjit/asmjit) through the RPCS3 dependency tree.
+The [VideoOut patch](patches/mesa-videoout.patch) applies to the pinned PS5 Mesa source above and keeps its MIT terms. The SPU hybrid path uses [AsmJit](https://github.com/asmjit/asmjit) through the RPCS3 dependency tree. The asynchronous SPU scheduling was inspired by the [ARMSX3 background compilation work](https://github.com/ARMSX2/ARMSX3/commit/ab79c1ecef2686acd065a59a31fe655e4758ca42) and uses the RPCS3 interpreter and LLVM recompilation paths.

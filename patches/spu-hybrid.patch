@@ -1,35 +1,46 @@
 diff --git a/rpcs3/Emu/Cell/SPUThread.cpp b/rpcs3/Emu/Cell/SPUThread.cpp
 --- a/rpcs3/Emu/Cell/SPUThread.cpp
 +++ b/rpcs3/Emu/Cell/SPUThread.cpp
-@@ -27,6 +27,7 @@
+@@ -21,6 +21,7 @@
+ #include "Emu/Cell/SPUAnalyser.h"
+ #include "Emu/Cell/SPUThread.h"
+ #include "Emu/Cell/SPURecompiler.h"
++#include "recompiler_spu_async.h"
+ #include "Emu/Cell/timers.hpp"
  
- #include <cmath>
- #include <cfenv>
-+#include <cstdlib>
- #include <thread>
- #include <shared_mutex>
- #include <span>
-@@ -1797,6 +1798,25 @@
+ #include "Emu/RSX/Core/RSXReservationLock.hpp"
+@@ -1797,6 +1798,36 @@
  	if (spu_decoder == spu_decoder_type::llvm)
  	{
  #if defined(ARCH_X64)
 +#ifdef RPCS3_PS5
-+		// Cache workers still build with LLVM. AsmJit handles live dispatch misses.
-+		static const bool hybrid_enabled = []
++		// Cache workers still use LLVM. Select the first tier for live misses.
++		using namespace recompiler::spu_async;
++		const mode selected = ps5_mode();
++		if (selected == mode::hybrid ||
++			(selected == mode::background && (!spu_runtime::g_interpreter ||
++				spu_runtime::g_interpreter == spu_runtime::g_gateway)))
 +		{
-+			const char* app_root = std::getenv("RPCS3_PS5_APP_ROOT");
-+			if (app_root && *app_root && fs::is_file(std::string(app_root) + "/spu-hybrid.enable"))
++			static const bool reported = [selected]
 +			{
-+				spu_log.notice("SPU hybrid JIT: LLVM precompilation, AsmJit on runtime cache misses");
++				if (selected == mode::background)
++					spu_log.warning("SPU background JIT: interpreter unavailable, using live AsmJit");
++				else
++					spu_log.notice("SPU hybrid JIT: LLVM precompilation, AsmJit on runtime cache misses");
 +				return true;
-+			}
-+			return false;
-+		}();
-+
-+		if (hybrid_enabled)
-+		{
++			}();
++			static_cast<void>(reported);
 +			jit = spu_recompiler_base::make_asmjit_recompiler();
 +			return;
++		}
++		if (selected == mode::background)
++		{
++			static const bool reported = []
++			{
++				spu_log.notice("SPU background JIT: x64 interpreter tier and asynchronous LLVM");
++				return true;
++			}();
++			static_cast<void>(reported);
 +		}
 +#endif
  		jit = spu_recompiler_base::make_fast_llvm_recompiler();
