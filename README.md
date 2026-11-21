@@ -97,11 +97,11 @@ cmake --build build/ps5 --target rpcs3
 
 Pass the native ELF to the application packaging tools provided by your target environment. Use the resulting `eboot.bin` with the staging command above.
 
-### Firmware compatibility
+### Firmware 4.xx compatibility
 
 The core uses one Vulkan renderer across firmware versions. It fills the shader's declared texture slots, checks mutable samplers and preserves device features when optional fault diagnostics are enabled. The controller enables motion when the system provides the sensor API. A missing API leaves buttons and sticks available.
 
-A 4.50 retail sample is the current comparison target. Run this check on the converted native ELF before adapting another game. It records the firmware release and module hashes and returns a nonzero exit status for newly required native calls or modules. A console run is still required to verify graphics, controller input and gameplay on a given firmware.
+The native import audit uses a local retail sample from the 4.xx firmware series. Run this check on the converted native ELF before adapting another game. It records the firmware release and module hashes and returns a nonzero exit status for newly required native calls or modules. Verify graphics, controller input and gameplay on each firmware version you intend to support.
 
 ```sh
 python3 tools/compare_firmware.py --candidate build/game.sce.elf \
