@@ -10,6 +10,9 @@ recompiler_title_update_manifest.h
 *.pkg
 *.rap
 *.rif
+*.[eE][dD][aA][tT]
+*.[kK][eE][yY]
+*.[iI][rR][dD]
 *.pup
 *.zip
 *.7z

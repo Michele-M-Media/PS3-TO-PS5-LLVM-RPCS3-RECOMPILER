@@ -1799,6 +1799,12 @@ bool VKGSRender::load_program()
 	// TODO: EXT_dynamic_state should get rid of this sillyness soon (kd)
 	const auto vertex_state = vk::decode_vertex_input_assembly_state();
 
+	// Layout changes affect the pipeline key but do not change the decoded RSX state.
+	constexpr u64 renderpass_formats_and_samples = (1ull << 22) - 1;
+	const u64 renderpass_changes = m_pipeline_properties.renderpass_key ^ m_current_renderpass_key;
+	const bool pipeline_properties_dirty = m_graphics_state.test(rsx::pipeline_state::pipeline_config_dirty) ||
+		(renderpass_changes & renderpass_formats_and_samples) ||
+		m_pipeline_properties.state.cs.attachmentCount != m_draw_buffers.size();
 	const bool shader_dirty = !!(m_graphics_state & rsx::pipeline_state::invalidate_pipeline_bits);
 	if (shader_dirty)
 	{
@@ -1809,7 +1815,7 @@ bool VKGSRender::load_program()
 
 		m_graphics_state.clear(rsx::pipeline_state::invalidate_pipeline_bits);
 	}
-	else if (!(m_graphics_state & rsx::pipeline_state::pipeline_config_dirty) &&
+	else if (!pipeline_properties_dirty && !renderpass_changes &&
 		m_program &&
 		m_pipeline_properties.state.ia.topology == vertex_state.primitive &&
 		m_pipeline_properties.state.ia.primitiveRestartEnable == vertex_state.restart_index_enabled)
@@ -1836,7 +1842,7 @@ bool VKGSRender::load_program()
 	auto &vertex_program = current_vertex_program;
 	auto &fragment_program = current_fragment_program;
 
-	if (m_graphics_state & rsx::pipeline_state::pipeline_config_dirty)
+	if (pipeline_properties_dirty)
 	{
 		vk::pipeline_props properties = vk::decode_rsx_state(
 			vertex_state,

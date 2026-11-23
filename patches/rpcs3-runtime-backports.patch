@@ -1,0 +1,215 @@
+diff --git a/rpcs3/Emu/Cell/Modules/cellSaveData.cpp b/rpcs3/Emu/Cell/Modules/cellSaveData.cpp
+index 22086bdf5..7ba53be54 100644
+--- a/rpcs3/Emu/Cell/Modules/cellSaveData.cpp
++++ b/rpcs3/Emu/Cell/Modules/cellSaveData.cpp
+@@ -1615,7 +1615,8 @@ static NEVER_INLINE error_code savedata_op(ppu_thread& ppu, u32 operation, u32 v
+ 		}
+ 
+ 		statGet->sysSizeKB = 35; // always reported as 35 regardless of actual file sizes
+-		statGet->sizeKB = !save_entry.isNew ? ::narrow<s32>((size_bytes / 1024) + statGet->sysSizeKB) : 0;
++		// The functions without userdata (flag 0x2 clear) leave sysSizeKB out
++		statGet->sizeKB = !save_entry.isNew ? ::narrow<s32>((size_bytes / 1024) + (unk_op_flags & 0x2 ? static_cast<s32>(statGet->sysSizeKB) : 0)) : 0;
+ 
+ 		std::memset(result.get_ptr(), 0, ::offset32(&CellSaveDataCBResult::userdata));
+ 
+@@ -2324,7 +2325,7 @@ error_code cellSaveDataListSave(ppu_thread& ppu, u32 version, PSetList setList,
+ 	cellSaveData.warning("cellSaveDataListSave(version=%d, setList=*0x%x, setBuf=*0x%x, funcList=*0x%x, funcStat=*0x%x, funcFile=*0x%x, container=0x%x)",
+ 		version, setList, setBuf, funcList, funcStat, funcFile, container);
+ 
+-	return savedata_op(ppu, SAVEDATA_OP_LIST_SAVE, version, vm::null, CELL_SAVEDATA_ERRDIALOG_ALWAYS, setList, setBuf, funcList, vm::null, funcStat, funcFile, container, 2, vm::null, 0, vm::null);
++	return savedata_op(ppu, SAVEDATA_OP_LIST_SAVE, version, vm::null, CELL_SAVEDATA_ERRDIALOG_ALWAYS, setList, setBuf, funcList, vm::null, funcStat, funcFile, container, 0, vm::null, 0, vm::null);
+ }
+ 
+ error_code cellSaveDataListLoad(ppu_thread& ppu, u32 version, PSetList setList, PSetBuf setBuf, PFuncList funcList,
+@@ -2333,7 +2334,7 @@ error_code cellSaveDataListLoad(ppu_thread& ppu, u32 version, PSetList setList,
+ 	cellSaveData.warning("cellSaveDataListLoad(version=%d, setList=*0x%x, setBuf=*0x%x, funcList=*0x%x, funcStat=*0x%x, funcFile=*0x%x, container=0x%x)",
+ 		version, setList, setBuf, funcList, funcStat, funcFile, container);
+ 
+-	return savedata_op(ppu, SAVEDATA_OP_LIST_LOAD, version, vm::null, CELL_SAVEDATA_ERRDIALOG_ALWAYS, setList, setBuf, funcList, vm::null, funcStat, funcFile, container, 2, vm::null, 0, vm::null);
++	return savedata_op(ppu, SAVEDATA_OP_LIST_LOAD, version, vm::null, CELL_SAVEDATA_ERRDIALOG_ALWAYS, setList, setBuf, funcList, vm::null, funcStat, funcFile, container, 0, vm::null, 0, vm::null);
+ }
+ 
+ error_code cellSaveDataFixedSave2(ppu_thread& ppu, u32 version, PSetList setList, PSetBuf setBuf, PFuncFixed funcFixed,
+@@ -2360,7 +2361,7 @@ error_code cellSaveDataFixedSave(ppu_thread& ppu, u32 version, PSetList setList,
+ 	cellSaveData.warning("cellSaveDataFixedSave(version=%d, setList=*0x%x, setBuf=*0x%x, funcFixed=*0x%x, funcStat=*0x%x, funcFile=*0x%x, container=0x%x)",
+ 		version, setList, setBuf, funcFixed, funcStat, funcFile, container);
+ 
+-	return savedata_op(ppu, SAVEDATA_OP_FIXED_SAVE, version, vm::null, CELL_SAVEDATA_ERRDIALOG_ALWAYS, setList, setBuf, vm::null, funcFixed, funcStat, funcFile, container, 2, vm::null, 0, vm::null);
++	return savedata_op(ppu, SAVEDATA_OP_FIXED_SAVE, version, vm::null, CELL_SAVEDATA_ERRDIALOG_ALWAYS, setList, setBuf, vm::null, funcFixed, funcStat, funcFile, container, 0, vm::null, 0, vm::null);
+ }
+ 
+ error_code cellSaveDataFixedLoad(ppu_thread& ppu, u32 version, PSetList setList, PSetBuf setBuf, PFuncFixed funcFixed,
+@@ -2369,7 +2370,7 @@ error_code cellSaveDataFixedLoad(ppu_thread& ppu, u32 version, PSetList setList,
+ 	cellSaveData.warning("cellSaveDataFixedLoad(version=%d, setList=*0x%x, setBuf=*0x%x, funcFixed=*0x%x, funcStat=*0x%x, funcFile=*0x%x, container=0x%x)",
+ 		version, setList, setBuf, funcFixed, funcStat, funcFile, container);
+ 
+-	return savedata_op(ppu, SAVEDATA_OP_FIXED_LOAD, version, vm::null, CELL_SAVEDATA_ERRDIALOG_ALWAYS, setList, setBuf, vm::null, funcFixed, funcStat, funcFile, container, 2, vm::null, 0, vm::null);
++	return savedata_op(ppu, SAVEDATA_OP_FIXED_LOAD, version, vm::null, CELL_SAVEDATA_ERRDIALOG_ALWAYS, setList, setBuf, vm::null, funcFixed, funcStat, funcFile, container, 0, vm::null, 0, vm::null);
+ }
+ 
+ error_code cellSaveDataAutoSave2(ppu_thread& ppu, u32 version, vm::cptr<char> dirName, u32 errDialog, PSetBuf setBuf,
+@@ -2396,7 +2397,7 @@ error_code cellSaveDataAutoSave(ppu_thread& ppu, u32 version, vm::cptr<char> dir
+ 	cellSaveData.warning("cellSaveDataAutoSave(version=%d, dirName=%s, errDialog=%d, setBuf=*0x%x, funcStat=*0x%x, funcFile=*0x%x, container=0x%x)",
+ 		version, dirName, errDialog, setBuf, funcStat, funcFile, container);
+ 
+-	return savedata_op(ppu, SAVEDATA_OP_AUTO_SAVE, version, dirName, errDialog, vm::null, setBuf, vm::null, vm::null, funcStat, funcFile, container, 2, vm::null, 0, vm::null);
++	return savedata_op(ppu, SAVEDATA_OP_AUTO_SAVE, version, dirName, errDialog, vm::null, setBuf, vm::null, vm::null, funcStat, funcFile, container, 0, vm::null, 0, vm::null);
+ }
+ 
+ error_code cellSaveDataAutoLoad(ppu_thread& ppu, u32 version, vm::cptr<char> dirName, u32 errDialog, PSetBuf setBuf,
+@@ -2405,7 +2406,7 @@ error_code cellSaveDataAutoLoad(ppu_thread& ppu, u32 version, vm::cptr<char> dir
+ 	cellSaveData.warning("cellSaveDataAutoLoad(version=%d, dirName=%s, errDialog=%d, setBuf=*0x%x, funcStat=*0x%x, funcFile=*0x%x, container=0x%x)",
+ 		version, dirName, errDialog, setBuf, funcStat, funcFile, container);
+ 
+-	return savedata_op(ppu, SAVEDATA_OP_AUTO_LOAD, version, dirName, errDialog, vm::null, setBuf, vm::null, vm::null, funcStat, funcFile, container, 2, vm::null, 0, vm::null);
++	return savedata_op(ppu, SAVEDATA_OP_AUTO_LOAD, version, dirName, errDialog, vm::null, setBuf, vm::null, vm::null, funcStat, funcFile, container, 0, vm::null, 0, vm::null);
+ }
+ 
+ error_code cellSaveDataListAutoSave(ppu_thread& ppu, u32 version, u32 errDialog, PSetList setList, PSetBuf setBuf, PFuncFixed funcFixed, PFuncStat funcStat, PFuncFile funcFile, u32 container, vm::ptr<void> userdata)
+diff --git a/rpcs3/Emu/Cell/PPUInterpreter.cpp b/rpcs3/Emu/Cell/PPUInterpreter.cpp
+index d01eac389..b62b02002 100644
+--- a/rpcs3/Emu/Cell/PPUInterpreter.cpp
++++ b/rpcs3/Emu/Cell/PPUInterpreter.cpp
+@@ -350,7 +350,7 @@ struct ppu_abstract_t
+ 	} sat{};
+ };
+ 
+-extern void do_cell_atomic_128_store(u32 addr, const void* to_write);
++extern void do_cell_atomic_128_store(u32 addr, const void* to_write, bool lock_rsx = true);
+ 
+ inline u64 dup32(u32 x) { return x | static_cast<u64>(x) << 32; }
+ 
+diff --git a/rpcs3/Emu/Cell/SPULLVMRecompiler.cpp b/rpcs3/Emu/Cell/SPULLVMRecompiler.cpp
+index bce3d475e..f1d5b114f 100644
+--- a/rpcs3/Emu/Cell/SPULLVMRecompiler.cpp
++++ b/rpcs3/Emu/Cell/SPULLVMRecompiler.cpp
+@@ -1638,6 +1638,8 @@ public:
+ 			return compile_interpreter();
+ 		}
+ 
++		reset_transforms();
++
+ 		const u32 start0 = _func.entry_point;
+ 		const usz func_size = _func.data.size();
+ 
+diff --git a/rpcs3/Emu/Cell/SPUThread.cpp b/rpcs3/Emu/Cell/SPUThread.cpp
+index d96843163..e9531f4f9 100644
+--- a/rpcs3/Emu/Cell/SPUThread.cpp
++++ b/rpcs3/Emu/Cell/SPUThread.cpp
+@@ -521,7 +521,7 @@ namespace vm
+ 	std::array<atomic_t<reservation_waiter_t, 128>, 1024> g_resrv_waiters_count{};
+ }
+ 
+-void do_cell_atomic_128_store(u32 addr, const void* to_write);
++void do_cell_atomic_128_store(u32 addr, const void* to_write, bool lock_rsx = true);
+ 
+ extern thread_local u64 g_tls_fault_spu;
+ 
+@@ -2178,7 +2178,7 @@ void spu_thread::do_dma_transfer(spu_thread* _this, const spu_mfc_cmd& args, u8*
+ 
+ 		for (u32 size = args.size, size0; is_get; size -= size0, dst += size0, src += size0, eal += size0)
+ 		{
+-			size0 = std::min<u32>(128 - (eal & 127), std::min<u32>(size, 128));
++			size0 = std::min<u32>(128 - (eal & 127), size);
+ 
+ 			for (u64 i = 0;; [&]()
+ 			{
+@@ -2303,12 +2303,12 @@ void spu_thread::do_dma_transfer(spu_thread* _this, const spu_mfc_cmd& args, u8*
+ 		{
+ 			for (u32 size0, size = args.size;; size -= size0, dst += size0, src += size0, eal += size0)
+ 			{
+-				size0 = std::min<u32>(128 - (eal & 127), std::min<u32>(size, 128));
++				size0 = std::min<u32>(128 - (eal & 127), size);
+ 
+ 				if (size0 == 128u && g_cfg.core.accurate_cache_line_stores)
+ 				{
+-					// As atomic as PUTLLUC
+-					do_cell_atomic_128_store(eal, src);
++					// Keep the existing DMA reservation if it already covers this store.
++					do_cell_atomic_128_store(eal, src, !rsx_lock.owns_lock());
+ 
+ 					if (size == size0)
+ 					{
+@@ -3557,12 +3557,13 @@ bool spu_thread::do_putllc(const spu_mfc_cmd& args)
+ 	}
+ }
+ 
+-void do_cell_atomic_128_store(u32 addr, const void* to_write)
++void do_cell_atomic_128_store(u32 addr, const void* to_write, bool lock_rsx)
+ {
+ 	perf_meter<"STORE128"_u64> perf0;
+ 
+ 	const auto cpu = get_current_cpu_thread();
+-	rsx::reservation_lock rsx_lock(addr, 128);
++	rsx::reservation_lock rsx_lock(addr, 128,
++		lock_rsx && g_cfg.core.rsx_accurate_res_access && addr < rsx::constants::local_mem_base);
+ 
+ 	u64 shared_mem = vm::g_shmem[addr >> 16];
+ 
+@@ -4575,6 +4576,7 @@ bool spu_thread::process_mfc_cmd()
+ 			}
+ 
+ 			mov_rdata(rdata, data);
++			atomic_fence_acquire();
+ 
+ 			if (u64 time0 = vm::reservation_acquire(addr); ntime != time0)
+ 			{
+diff --git a/rpcs3/Emu/Cell/lv2/sys_rsx.cpp b/rpcs3/Emu/Cell/lv2/sys_rsx.cpp
+index d7ec04813..5c9f42697 100644
+--- a/rpcs3/Emu/Cell/lv2/sys_rsx.cpp
++++ b/rpcs3/Emu/Cell/lv2/sys_rsx.cpp
+@@ -114,6 +114,12 @@ bool rsx::thread::send_event(u64 data1, u64 event_flags, u64 data3)
+ 		// Wait a bit before resending event
+ 		thread_ctrl::wait_for(100);
+ 
++		// The VBlank worker can be joined while the guest event queue is full.
++		if (!cpu && thread_ctrl::get_current() && thread_ctrl::state() == thread_state::aborting)
++		{
++			return false;
++		}
++
+ 		if (cpu && cpu->get_class() == thread_class::rsx)
+ 			cpu->cpu_wait({});
+ 
+diff --git a/rpcs3/Emu/RSX/Core/RSXReservationLock.hpp b/rpcs3/Emu/RSX/Core/RSXReservationLock.hpp
+index 7a4ab7662..52b80c7b5 100644
+--- a/rpcs3/Emu/RSX/Core/RSXReservationLock.hpp
++++ b/rpcs3/Emu/RSX/Core/RSXReservationLock.hpp
+@@ -40,6 +40,11 @@ namespace rsx
+ 			}
+ 		}
+ 
++		bool owns_lock() const noexcept
++		{
++			return length != 0;
++		}
++
+ 		// Multi-range lock. If ranges overlap, the combined range will be acquired.
+ 		// If ranges do not overlap, the first range that is in main memory will be acquired.
+ 		reservation_lock(u32 dst_addr, u32 dst_length, u32 src_addr, u32 src_length)
+diff --git a/rpcs3/Emu/RSX/RSXThread.cpp b/rpcs3/Emu/RSX/RSXThread.cpp
+index 7f42689cb..798199b22 100644
+--- a/rpcs3/Emu/RSX/RSXThread.cpp
++++ b/rpcs3/Emu/RSX/RSXThread.cpp
+@@ -1087,7 +1087,7 @@ namespace rsx
+ 					// Save the difference before pause
+ 					start_time = get_system_time() - start_time;
+ 
+-					while (Emu.IsPaused() && !is_stopped())
++					while (Emu.IsPaused() && !is_stopped() && thread_ctrl::state() != thread_state::aborting)
+ 					{
+ 						thread_ctrl::wait_for(5'000);
+ 					}
+diff --git a/rpcs3/Emu/RSX/VK/VKGSRender.h b/rpcs3/Emu/RSX/VK/VKGSRender.h
+index 6b7ea5af1..fef4149fd 100644
+--- a/rpcs3/Emu/RSX/VK/VKGSRender.h
++++ b/rpcs3/Emu/RSX/VK/VKGSRender.h
+@@ -55,7 +55,7 @@ private:
+ 	const VKVertexProgram *m_vertex_prog = nullptr;
+ 	vk::glsl::program *m_program = nullptr;
+ 	vk::glsl::program *m_prev_program = nullptr;
+-	vk::pipeline_props m_pipeline_properties;
++	vk::pipeline_props m_pipeline_properties{};
+ 
+ 	const vs_binding_table_t* m_vs_binding_table = nullptr;
+ 	const fs_binding_table_t* m_fs_binding_table = nullptr;

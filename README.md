@@ -6,6 +6,8 @@ PS3 TO PS5 LLVM RPCS3 RECOMPILER boots a local PS3 disc dump directly with a PS5
 
 The Vulkan changes include the interpreter's base pipeline catalogue, parallel preparation, shared driver caching, device-checked dynamic states, depth and feedback passes, and retry of pending texture uploads. The warmup journal now retains up to 32 slow pipeline states, including multisampled states supported by the active device, so those pipelines can be prepared before gameplay on later launches. It reads existing v1 journals, and LLVM and Vulkan caches are reused. A new game, render state, or driver can still require compilation.
 
+The v0.4 driver adds ordered asynchronous RADV submission, uses all allocated VideoOut swapchain buffers, and corrects the clock used for timed waits. The floating-point stereo backend preserves full mixer blocks and can soften brief gaps using the audio on both sides of the interruption. Sustained interruptions can still be audible.
+
 ## Prepare a disc
 
 Use a directory containing `PS3_DISC.SFB`, `PS3_GAME/PARAM.SFO`, and `PS3_GAME/USRDIR/EBOOT.BIN`. Keep the original title ID and the full disc structure. RPCS3's guide describes supported dump formats and local firmware installation. [RPCS3 Quickstart](https://rpcs3.net/quickstart)
@@ -22,7 +24,7 @@ python tools/prepare_dump.py stage \
 
 Use a `param.json` from the local package for the target PS5 homebrew title and its matching platform modules. The tool sets the display name to **PS3 TO PS5 LLVM RPCS3 RECOMPILER** in each locale and preserves the package identifiers. `templates/param.json` shows the name fields with placeholder IDs. Keep platform modules supplied by the native build in `sce_module/` when needed. Run the resulting directory with your PS5 homebrew environment.
 
-The package uses the RPCS3 icon by default. Pass `--icon0 path/to/icon.png` to use a custom square PNG. Pass `--pic0 selection.dds` and optionally `--pic1 launch.dds` to set the PS5 menu and launch artwork. Use 3840×2160 BC7_UNORM DDS textures with the DX10 header and one mip level. The legacy PNG input for `--pic0` is still accepted. RPCS3 reads any per-language `PIC0_XX.PNG` overlays from the original `PS3_GAME` folder when showing its compilation screen.
+The package uses the RPCS3 icon by default. Pass `--icon0 path/to/icon.png` to fit custom artwork into an opaque 512×512 square with FFmpeg. Use `--pic0 selection.dds` and `--pic1 background.dds` for PS5 artwork. The [title preparation guide](docs/preparing-titles.md) covers disc keys and IRD identification, DDS and localized artwork, private DLC packs, and the `.BIN` update workflow.
 
 ## Display, controller and SPU options
 
@@ -50,7 +52,7 @@ Create an empty `clear-cache.enable` next to `eboot.bin` and start the title onc
 
 For graphics diagnostics, `RECOMPILER_SHADER_WARMUP` reports prepared and reused pipeline states. `RECOMPILER_FRAME_QUEUE` times submission, presentation, command-buffer reuse and frame retirement on slow frames. When rolling back to v0.2, that version can ignore a journal with more than eight entries. Existing LLVM and Vulkan caches can still be reused.
 
-### Optional single-file disc update
+### Single-file disc update for the launcher
 
 Use a clean desktop RPCS3 installation of the matching update as input. The tool packs every update file, including empty files, into a short-named archive and creates a private C++ manifest for that build.
 
@@ -61,19 +63,19 @@ python tools/apply_overlay.py rpcs3 \
   --update-manifest local/title-update/recompiler_title_update_manifest.h
 ```
 
-Build from that checkout. Place `UPDATE.BIN` beside the resulting `eboot.bin` and `PS3_GAME` in the staged title. The launcher checks the disc ID, archive SHA-256 and each file before publishing the update to private game data. For a new guest executable, LLVM may compile new PPU modules on the first launch. Check `RECOMPILER_TITLE_UPDATE`, `Updates found`, and `APP_VER` in the runtime log to confirm the update was selected. The manifest and archive contain local title data and are ignored by Git.
+Build from that checkout. Pass `--update-bin local/title-update/UPDATE.BIN` to the staging command or place `UPDATE.BIN` beside `eboot.bin` and `PS3_GAME`. The launcher checks the disc ID, archive SHA-256 and each file before publishing the update to private game data. It preserves game-written metadata on an established installation of the same version and verifies payload files before marking the update ready. A new guest executable can require new PPU modules on first launch. Check `RECOMPILER_TITLE_UPDATE`, `Updates found`, and `APP_VER` in the runtime log to confirm the update was selected. The manifest and archive contain local title data and are ignored by Git.
 
 ## Build
 
 This repository contains source changes for the native runtime. Build the target dependencies first using their pinned revisions in [graphics-dependencies.json](graphics-dependencies.json). The PS5 configuration expects a native LLVM toolchain, Qt, FFmpeg, Vulkan/RADV, and their PS5 paths. The options and expected paths are recorded in the platform patch and checked by CMake.
 
-Apply [the VideoOut patch](patches/mesa-videoout.patch) to the pinned PS5 Mesa checkout before building the RADV release archive. The patch includes display ownership handoff and handles the idle period of a VRR display before the first flip. Commit the patch locally because the PS5 Vulkan driver builder reads the Mesa sources from a Git revision. With `PS5_Mesa` next to `PS5_Vulkan`, run the following commands after configuring the upstream build prerequisites. [PS5 Vulkan RADV build](https://github.com/mihawk-99/PS5_Vulkan/blob/ace98a99460c95a8d2821a9e33935c7b71070f7f/tools/build-radv.sh)
+Apply [the RADV and VideoOut patch](patches/mesa-videoout.patch) to the pinned PS5 Mesa checkout before building the driver archive. The patch includes display ownership handoff and handles the idle period of a VRR display before the first flip. It also updates queue dispatch and synchronization. Commit the patch locally because the driver builder reads the Mesa sources from a Git revision. With `PS5_Mesa` next to `PS5_Vulkan`, run the following commands after configuring the upstream prerequisites. [PS5 Vulkan RADV build](https://github.com/mihawk-99/PS5_Vulkan/blob/ace98a99460c95a8d2821a9e33935c7b71070f7f/tools/build-radv.sh)
 
 ```sh
 git -C PS5_Mesa checkout 1ba9874f478657ccf6da72ce55f0260164cc0bd0
 git -C PS5_Mesa apply /path/to/recompiler/patches/mesa-videoout.patch
-git -C PS5_Mesa add src/vulkan/wsi/wsi_common_videoout.c src/vulkan/wsi/videoout_refresh_policy.h
-git -C PS5_Mesa commit -m "Apply native VideoOut integration"
+git -C PS5_Mesa add src/amd/vulkan/winsys/ps5 src/vulkan/wsi src/util/ps5-cond-wait.h
+git -C PS5_Mesa commit -m "Apply PS5 RADV and VideoOut runtime changes"
 PS5_MESA_REVISION="$(git -C PS5_Mesa rev-parse HEAD)" \
   bash PS5_Vulkan/tools/build-radv.sh release
 ```

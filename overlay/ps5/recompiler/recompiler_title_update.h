@@ -1,4 +1,5 @@
 #pragma once
+#include <algorithm>
 
 #include "Crypto/sha256.h"
 #include "Loader/PSF.h"
@@ -108,23 +109,52 @@ namespace recompiler_title_update
 		const auto destination = data + "/dev_hdd0/game/" + title_id + "/";
 		const auto recovery = data + "/updates/" + title_id + "-" + update_version + "/";
 		const auto stamp = recovery + "installed";
-		const auto& eboot = assets[assets.size() - 2];
 		const auto& sfo = assets.back();
-		if (fs::is_file(stamp) && verify_file(destination + eboot.path, eboot) &&
-		    verify_file(destination + sfo.path, sfo))
+		const std::string revision = std::string(title_id) + " " + update_version + "\n";
+		bool stamped = false;
+		fs::stat_t marker_info{};
+		if (fs::get_stat(stamp, marker_info))
 		{
-			log.notice("RECOMPILER_TITLE_UPDATE: %s %s ready", title_id, update_version);
-			return true;
+			if (marker_info.is_directory || marker_info.is_symlink)
+				return false;
+			if (marker_info.size == revision.size())
+			{
+				fs::file input(stamp);
+				std::string saved(revision.size(), '\0');
+				stamped = input && input.read(saved.data(), saved.size()) == saved.size() && saved == revision;
+			}
 		}
-		if (const auto installed = psf::load_object(destination + sfo.path); !installed.empty())
+		else if (fs::g_tls_error != fs::error::noent)
+			return false;
+
+		bool same_version = false;
+		fs::stat_t metadata{};
+		if (fs::get_stat(destination + sfo.path, metadata))
 		{
+			if (metadata.is_directory || metadata.is_symlink)
+				return false;
+			const auto installed = psf::load_object(destination + sfo.path);
 			const auto version = psf::get_string(installed, "APP_VER", "");
 			const auto serial = psf::get_string(installed, "TITLE_ID", "");
-			if (serial != title_id || version > update_version)
+			if (psf::get_string(installed, "CATEGORY", "") != "GD" || serial != title_id || version > update_version)
 			{
 				log.error("RECOMPILER_TITLE_UPDATE: incompatible installed title or version");
 				return false;
 			}
+			same_version = version == update_version;
+		}
+		else if (fs::g_tls_error != fs::error::noent)
+			return false;
+
+		// The guest rewrites localized fields and installation metadata in PARAM.SFO.
+		// Keep those fields on an established installation, including during payload repair.
+		const auto& eboot = assets[assets.size() - 2];
+		const bool keep_sfo = same_version && (stamped || verify_file(destination + eboot.path, eboot));
+		if (stamped && keep_sfo && std::all_of(assets.begin(), assets.end() - 1,
+			[&](const asset& item) { return verify_file(destination + item.path, item); }))
+		{
+			log.notice("RECOMPILER_TITLE_UPDATE: %s %s ready", title_id, update_version);
+			return true;
 		}
 		fs::file source(path);
 		if (!source || !checked_transfer(source, 0, archive))
@@ -135,6 +165,8 @@ namespace recompiler_title_update
 		log.notice("RECOMPILER_TITLE_UPDATE: %s verified, installing %s %s", archive.path, title_id, update_version);
 		for (const auto& expected : assets)
 		{
+			if (&expected == &sfo && keep_sfo)
+				continue;
 			if (!install_asset(source, destination + expected.path,
 			                   recovery + "previous/" + expected.path, expected))
 			{
@@ -145,7 +177,6 @@ namespace recompiler_title_update
 		if (!fs::create_path(recovery))
 			return false;
 		fs::pending_file marker(stamp);
-		const std::string revision = std::string(title_id) + " " + update_version + "\n";
 		if (!marker.file || marker.file.write(revision.data(), revision.size()) != revision.size() || !marker.commit())
 			return false;
 		log.notice("RECOMPILER_TITLE_UPDATE: %s %s staged and verified", title_id, update_version);

@@ -1,16 +1,299 @@
+diff --git a/src/amd/vulkan/winsys/ps5/radv_ps5_cs.c b/src/amd/vulkan/winsys/ps5/radv_ps5_cs.c
+--- a/src/amd/vulkan/winsys/ps5/radv_ps5_cs.c
++++ b/src/amd/vulkan/winsys/ps5/radv_ps5_cs.c
+@@ -15,6 +15,10 @@
+ #include "util/u_atomic.h"
+ #include "util/u_math.h"
+ #include "sid.h"
++#include "submit-dispatch.h"
++
++bool radv_ps5_async_submit_failed(void);
++static bool radv_ps5_drain_native_dispatch(void);
+ 
+ /* Command streams. The console faults a PM4 INDIRECT_BUFFER into title memory
+  * (PS5_Vulkan B8), so nothing is chained: a stream's words stay in CPU memory,
+@@ -358,6 +362,10 @@
+    const uint64_t va = (uint64_t)(uintptr_t)value;
+ 
+    simple_mtx_lock(&queue->submit_lock);
++   if (!radv_ps5_drain_native_dispatch()) {
++      simple_mtx_unlock(&queue->submit_lock);
++      return 0;
++   }
+    *value = UINT64_MAX;
+    radv_ps5_cpu_flush((const void *)value, sizeof(*value));
+    words[0] = PKT3(PKT3_RELEASE_MEM, 6, 0);
+@@ -530,6 +538,103 @@
+    radv_ps5_submit_window.window_start = now;
+ }
+ 
++struct radv_ps5_native_batch {
++   struct radv_ps5_queue *queue;
++   uint32_t *words;
++   uint32_t count;
++   uint64_t seq;
++   uint64_t claim_ns;
++   uint64_t copy_ns;
++};
++
++static struct submit_dispatch radv_ps5_dispatch;
++static struct radv_ps5_native_batch radv_ps5_dispatch_batch;
++static int radv_ps5_native_error;
++static bool radv_ps5_dispatch_available;
++static bool radv_ps5_dispatch_initialized;
++
++bool
++radv_ps5_async_submit_failed(void)
++{
++   return p_atomic_read(&radv_ps5_native_error) != 0;
++}
++
++static int
++radv_ps5_run_native_batch(const struct radv_ps5_native_batch *batch, struct util_dynarray *starts)
++{
++   struct radv_ps5_queue *queue = batch->queue;
++   const uint64_t completed_before = starts ? p_atomic_read(&queue->completed_seq) : radv_ps5_queue_poll(queue);
++   const unsigned parts = starts ? util_dynarray_num_elements(starts, uint32_t) : 1;
++   const uint64_t started = os_time_get_nano();
++   uint64_t part_start = started;
++   uint64_t longest_part_ns = 0;
++   int submitted = 0;
++   for (unsigned i = 0; i < parts && !submitted; i++) {
++      const uint32_t start = i ? *util_dynarray_element(starts, uint32_t, i) : 0;
++      const uint32_t end = i + 1 < parts ? *util_dynarray_element(starts, uint32_t, i + 1) : batch->count;
++      submitted = radv_ps5_submit(batch->words + start, end - start, queue->marker, (uint32_t)batch->seq);
++      const uint64_t part_end = os_time_get_nano();
++      longest_part_ns = MAX2(longest_part_ns, part_end - part_start);
++      part_start = part_end;
++   }
++   static uint64_t last_slow_report;
++   if (part_start - started >= UINT64_C(16666667) && part_start - last_slow_report >= UINT64_C(250000000)) {
++      last_slow_report = part_start;
++      fprintf(stderr, "RECOMPILER_VK_AGC_QUEUE: seq=%" PRIu64 " completed_before=%" PRIu64
++                      " completed_after=%" PRIu64 " words=%" PRIu32 " parts=%u native_us=%" PRIu64
++                      " max_part_us=%" PRIu64 " async=%u\n",
++              batch->seq, completed_before, radv_ps5_queue_poll(queue), batch->count, parts,
++              (part_start - started) / 1000, longest_part_ns / 1000, starts == NULL);
++   }
++   radv_ps5_note_submission(batch->count, batch->claim_ns, batch->copy_ns);
++   if (submitted) {
++      p_atomic_set(&radv_ps5_native_error, submitted);
++      mtx_lock(&queue->sync_lock);
++      cnd_broadcast(&queue->sync_cond);
++      mtx_unlock(&queue->sync_lock);
++      fprintf(stderr, "radv/ps5: sceAgcDriverSubmitDcb failed: 0x%08x\n", (unsigned)submitted);
++   }
++   return submitted;
++}
++
++static void
++radv_ps5_dispatch_execute(void *data)
++{
++   radv_ps5_run_native_batch(data, NULL);
++}
++
++/* The caller holds the queue's submit lock. A synchronous or multipart
++ * submission and a GPU-clock read cannot overtake a dispatched batch. */
++static bool
++radv_ps5_drain_native_dispatch(void)
++{
++   if (radv_ps5_dispatch_available) {
++      const uint64_t start = os_time_get_nano();
++      submit_dispatch_wait(&radv_ps5_dispatch);
++      const uint64_t done = os_time_get_nano();
++      static uint64_t last_wait_report;
++      if (done - start >= UINT64_C(16666667) && done - last_wait_report >= UINT64_C(250000000)) {
++         last_wait_report = done;
++         fprintf(stderr, "RECOMPILER_VK_NATIVE_WAIT: wait_us=%" PRIu64 "\n", (done - start) / 1000);
++      }
++   }
++   return !radv_ps5_async_submit_failed();
++}
++
++static bool
++radv_ps5_start_dispatch(void)
++{
++   if (!radv_ps5_dispatch_initialized) {
++      radv_ps5_dispatch_initialized = true;
++      radv_ps5_dispatch_available = submit_dispatch_start(&radv_ps5_dispatch, radv_ps5_dispatch_execute);
++      // The native graphics queue and its submission worker are process-owned.
++      if (radv_ps5_dispatch_available)
++         thrd_detach(radv_ps5_dispatch.thread);
++      fprintf(stderr, "RECOMPILER_VK_NATIVE_DISPATCH: active=%u slots=1\n", radv_ps5_dispatch_available);
++   }
++   return radv_ps5_dispatch_available;
++}
++
+ static VkResult
+ radv_ps5_cs_submit(struct radeon_winsys_ctx *rctx, const struct radv_winsys_submit_info *submit, uint32_t wait_count,
+                    const struct vk_sync_wait *waits, uint32_t signal_count, const struct vk_sync_signal *signals)
+@@ -551,11 +656,18 @@
+       return result;
+ 
+    simple_mtx_lock(&queue->submit_lock);
++   if (radv_ps5_async_submit_failed()) {
++      simple_mtx_unlock(&queue->submit_lock);
++      return VK_ERROR_DEVICE_LOST;
++   }
+    /* AGC owns the tessellation factor ring's registers: the ring is handed to
+     * it, after the GPU has finished with the one it held. */
+    if (ctx->tess_factor_ring_va && (ctx->tess_factor_ring_va != queue->tess_factor_ring_va ||
+                                     ctx->tess_factor_ring_size != queue->tess_factor_ring_size)) {
+-      radv_ps5_queue_wait_seq(queue, queue->submitted_seq, OS_TIMEOUT_INFINITE);
++      if (!radv_ps5_queue_wait_seq(queue, queue->submitted_seq, OS_TIMEOUT_INFINITE)) {
++         simple_mtx_unlock(&queue->submit_lock);
++         return VK_ERROR_DEVICE_LOST;
++      }
+       const int set = radv_ps5_set_tess_factor_ring(ctx->tess_factor_ring_va, ctx->tess_factor_ring_size);
+       if (set != 0)
+          fprintf(stderr, "radv/ps5: sceAgcDriverSetTFRing(0x%llx, %u) failed: 0x%08x\n",
+@@ -579,6 +691,13 @@
+       simple_mtx_unlock(&queue->submit_lock);
+       radv_ps5_sync_signal_seq(signal_count, signals, MAX2(last, depends));
+       return VK_SUCCESS;
++   }
++
++   // An empty submission above can alias a pending sequence. A submission
++   // with GPU work must acquire the single software dispatch slot first.
++   if (!radv_ps5_drain_native_dispatch()) {
++      simple_mtx_unlock(&queue->submit_lock);
++      return VK_ERROR_DEVICE_LOST;
+    }
+ 
+    /* The initial preambles (every submission starts from the state they set,
+@@ -661,21 +780,32 @@
+    util_dynarray_fini(&units);
+ 
+    const uint64_t copy_end = os_time_get_nano();
++   const uint64_t completed = p_atomic_read(&queue->completed_seq);
++   const unsigned parts = util_dynarray_num_elements(&starts, uint32_t);
++   const bool pressured = seq > completed && seq - completed > 2;
++   const bool dispatch = pressured && parts == 1 && radv_ps5_platform_runs_gpu() && radv_ps5_start_dispatch();
++   const struct radv_ps5_native_batch batch = {
++      .queue = queue,
++      .words = words,
++      .count = count,
++      .seq = seq,
++      .claim_ns = copy_start - claim_start,
++      .copy_ns = copy_end - copy_start,
++   };
++
++   // Publish the sequence, but only the GPU's end-of-pipe packet completes it.
+    p_atomic_set(&queue->submitted_seq, seq);
+    int submitted = 0;
+-   const unsigned parts = util_dynarray_num_elements(&starts, uint32_t);
+-   for (unsigned i = 0; i < parts && submitted == 0; i++) {
+-      const uint32_t start = *util_dynarray_element(&starts, uint32_t, i);
+-      const uint32_t end = i + 1 < parts ? *util_dynarray_element(&starts, uint32_t, i + 1) : count;
+-      submitted = radv_ps5_submit(words + start, end - start, queue->marker, (uint32_t)seq);
++   if (dispatch) {
++      radv_ps5_dispatch_batch = batch;
++      submit_dispatch_publish(&radv_ps5_dispatch, &radv_ps5_dispatch_batch);
++   } else {
++      submitted = radv_ps5_run_native_batch(&batch, &starts);
+    }
+    util_dynarray_fini(&starts);
+-   radv_ps5_note_submission(count, copy_start - claim_start, copy_end - copy_start);
+    simple_mtx_unlock(&queue->submit_lock);
+-   if (submitted != 0) {
+-      fprintf(stderr, "radv/ps5: sceAgcDriverSubmitDcb failed: 0x%08x\n", (unsigned)submitted);
++   if (submitted != 0)
+       return VK_ERROR_DEVICE_LOST;
+-   }
+    ctx->queue_used[submit->ip_type][submit->queue_index] = true;
+    radv_ps5_sync_signal_seq(signal_count, signals, seq);
+    return VK_SUCCESS;
+diff --git a/src/amd/vulkan/winsys/ps5/radv_ps5_sync.c b/src/amd/vulkan/winsys/ps5/radv_ps5_sync.c
+--- a/src/amd/vulkan/winsys/ps5/radv_ps5_sync.c
++++ b/src/amd/vulkan/winsys/ps5/radv_ps5_sync.c
+@@ -5,6 +5,8 @@
+  */
+ 
+ #include "radv_ps5_winsys.h"
++#include "c11/time.h"
++#include "util/ps5-cond-wait.h"
+ 
+ #include "util/os_time.h"
+ #include "vk_sync.h"
+@@ -112,6 +114,8 @@
+    return sync->seq == 0 || radv_ps5_queue_poll(queue) >= sync->seq;
+ }
+ 
++bool radv_ps5_async_submit_failed(void);
++
+ static VkResult
+ radv_ps5_sync_wait_many(struct vk_device *device, uint32_t wait_count, const struct vk_sync_wait *waits,
+                         enum vk_sync_wait_flags flags, uint64_t abs_timeout_ns)
+@@ -122,6 +126,10 @@
+ 
+    mtx_lock(&queue->sync_lock);
+    for (;;) {
++      if (radv_ps5_async_submit_failed()) {
++         mtx_unlock(&queue->sync_lock);
++         return VK_ERROR_DEVICE_LOST;
++      }
+       uint32_t ready = 0;
+       /* The sequence the slowest ready-but-running wait still needs. */
+       uint64_t need = 0;
+@@ -158,11 +166,11 @@
+       }
+       /* A signal still has to be submitted: sleep until one is, or a
+        * millisecond passes so running work is polled too. */
+-      struct timespec until;
+-      const uint64_t wake = MIN2(abs_timeout_ns, now + 1000000);
+-      until.tv_sec = wake / 1000000000;
+-      until.tv_nsec = wake % 1000000000;
+-      cnd_timedwait(&queue->sync_cond, &queue->sync_lock, &until);
++      if (ps5_cond_wait_for(&queue->sync_cond, &queue->sync_lock,
++                            MIN2(abs_timeout_ns - now, UINT64_C(1000000))) == thrd_error) {
++         mtx_unlock(&queue->sync_lock);
++         return VK_ERROR_DEVICE_LOST;
++      }
+    }
+ }
+ 
+diff --git a/src/amd/vulkan/winsys/ps5/radv_ps5_winsys.c b/src/amd/vulkan/winsys/ps5/radv_ps5_winsys.c
+--- a/src/amd/vulkan/winsys/ps5/radv_ps5_winsys.c
++++ b/src/amd/vulkan/winsys/ps5/radv_ps5_winsys.c
+@@ -88,9 +88,13 @@
+  * end well inside a millisecond (PS5_Vulkan R36). */
+ #define RADV_PS5_SPIN_NS UINT64_C(1500000)
+ 
++bool radv_ps5_async_submit_failed(void);
++
+ bool
+ radv_ps5_queue_wait_seq(struct radv_ps5_queue *queue, uint64_t seq, uint64_t abs_timeout_ns)
+ {
++   if (radv_ps5_async_submit_failed())
++      return false;
+    uint64_t completed = radv_ps5_queue_poll(queue);
+    if (completed >= seq)
+       return true;
+@@ -99,6 +103,8 @@
+    uint64_t progress_at = now;
+    uint64_t last = completed;
+    for (;;) {
++      if (radv_ps5_async_submit_failed())
++         return false;
+       completed = radv_ps5_queue_poll(queue);
+       if (completed >= seq)
+          return true;
 diff --git a/src/vulkan/wsi/wsi_common_videoout.c b/src/vulkan/wsi/wsi_common_videoout.c
-index 1f59ac2..efa145d 100644
 --- a/src/vulkan/wsi/wsi_common_videoout.c
 +++ b/src/vulkan/wsi/wsi_common_videoout.c
-@@ -45,6 +45,7 @@
+@@ -45,8 +45,11 @@
  #include <stdio.h>
  #include <stdlib.h>
  #include <string.h>
 +#include <sys/mman.h>
  
  #include "c11/threads.h"
++#include "c11/time.h"
++#include "util/ps5-cond-wait.h"
  #include "util/macros.h"
-@@ -70,14 +71,10 @@
+ #include "util/os_time.h"
+ #include "util/u_math.h"
+@@ -70,14 +73,10 @@
  #define VIDEOOUT_BUFFER_ALIGNMENT (UINT64_C(2) << 20)
  #define VIDEOOUT_REFRESH_MILLIHERTZ 59940
  #define VIDEOOUT_HIGH_REFRESH_MILLIHERTZ 119880
@@ -28,21 +311,21 @@ index 1f59ac2..efa145d 100644
  
  #if !defined(__PROSPERO__)
  /* The host model: flips show at once and a vblank comes every millisecond,
-@@ -106,6 +103,13 @@ sceVideoOutOpen(int32_t user, int32_t bus, int32_t index, const void *parameter)
+@@ -104,6 +103,13 @@
+ sceVideoOutOpen(int32_t user, int32_t bus, int32_t index, const void *parameter)
+ {
     return 1;
- }
- 
++}
++
 +static int
 +sceVideoOutClose(int32_t handle)
 +{
 +   host_shown_argument = 0;
 +   return 0;
-+}
-+
+ }
+ 
  static int
- sceVideoOutSetFlipRate(int32_t handle, int32_t rate)
- {
-@@ -260,6 +264,10 @@ struct wsi_videoout_output {
+@@ -260,6 +266,10 @@
     struct wsi_videoout_set {
        const struct wsi_videoout_size *size;
        uint8_t *buffers;
@@ -53,7 +336,7 @@ index 1f59ac2..efa145d 100644
     } sets[VIDEOOUT_SIZES];
     uint32_t set_count;
     /* The argument of the latest flip submitted; each flip's is one more. */
-@@ -277,6 +285,9 @@ struct wsi_videoout_output {
+@@ -277,6 +287,9 @@
  
     /* The flip thread and its queue. */
     bool thread_started;
@@ -63,7 +346,7 @@ index 1f59ac2..efa145d 100644
     thrd_t thread;
     struct wsi_videoout_present queue[VIDEOOUT_BUFFERS * 2];
     uint32_t queue_head, queue_count;
-@@ -316,22 +327,34 @@ struct wsi_videoout {
+@@ -316,22 +329,34 @@
  
  /* The title's param.json: /app0's, or the one PS5_VIDEOOUT_PARAM_JSON names, for a title
   * without /app0 (an elevated process does not see it). */
@@ -104,7 +387,7 @@ index 1f59ac2..efa145d 100644
  }
  
  /* The refresh period: the median of a few intervals between vblank waits,
-@@ -366,6 +389,8 @@ static bool
+@@ -366,6 +391,8 @@
  videoout_open_locked(void)
  {
     struct wsi_videoout_output *out = &videoout_output;
@@ -113,7 +396,7 @@ index 1f59ac2..efa145d 100644
     if (out->opened)
        return out->handle >= 0;
     out->opened = true;
-@@ -374,7 +399,8 @@ videoout_open_locked(void)
+@@ -374,7 +401,8 @@
        fprintf(stderr, "wsi/videoout: sceVideoOutOpen failed: 0x%08x\n", (unsigned)out->handle);
        return false;
     }
@@ -123,7 +406,7 @@ index 1f59ac2..efa145d 100644
        /* Positive: the output takes the mode. 0: it does not at the
         * console's present output, which is no error. A 1440p display answered
         * 0 while the console sent it 1080p (the console logged no 120 Hz format
-@@ -388,25 +414,24 @@ videoout_open_locked(void)
+@@ -388,25 +416,24 @@
              : -1;
        out->high_frame_rate = supported > 0 && configured == 0;
        if (out->high_frame_rate) {
@@ -154,15 +437,16 @@ index 1f59ac2..efa145d 100644
 -         fprintf(stderr,
 -                 "wsi/videoout: 119.88 Hz not offered on the console's present output (%d); presenting at 59.94 Hz\n",
 -                 supported);
+-      }
 +         videoout_log_refresh(supported > 0 ? "refused" : "unsupported",
 +                              attributes, supported, configured, 0, 0);
-       }
++      }
 +   } else {
 +      videoout_log_refresh("no_title_opt_in", attributes, -1, -1, 0, 0);
     }
     return true;
  }
-@@ -452,6 +477,8 @@ videoout_register_locked(const struct wsi_videoout_size *size, const struct wsi_
+@@ -452,6 +479,8 @@
     struct wsi_videoout_output *out = &videoout_output;
     for (uint32_t i = 0; i < out->set_count; i++) {
        if (out->sets[i].size == size) {
@@ -171,7 +455,7 @@ index 1f59ac2..efa145d 100644
           *set_out = &out->sets[i];
           return VK_SUCCESS;
        }
-@@ -487,6 +514,14 @@ videoout_register_locked(const struct wsi_videoout_size *size, const struct wsi_
+@@ -487,6 +516,14 @@
        return VK_ERROR_OUT_OF_DEVICE_MEMORY;
  #endif
  
@@ -186,7 +470,7 @@ index 1f59ac2..efa145d 100644
     int result = index == 0 ? sceVideoOutSetFlipRate(out->handle, videoout_flip_rate) : 0;
     struct ps5_video_out_buffer registered[VIDEOOUT_BUFFERS];
     for (uint32_t i = 0; i < VIDEOOUT_BUFFERS; i++)
-@@ -505,8 +540,7 @@ videoout_register_locked(const struct wsi_videoout_size *size, const struct wsi_
+@@ -505,8 +542,7 @@
     }
     fprintf(stderr, "wsi/videoout: %ux%u framebuffers registered as set %u, buffers %u-%u\n", size->extent.width,
             size->extent.height, index, index * VIDEOOUT_BUFFERS, index * VIDEOOUT_BUFFERS + VIDEOOUT_BUFFERS - 1);
@@ -196,7 +480,7 @@ index 1f59ac2..efa145d 100644
     *set_out = &out->sets[index];
     return VK_SUCCESS;
  }
-@@ -527,8 +561,10 @@ videoout_flip_thread(void *data)
+@@ -527,16 +563,26 @@
     struct wsi_videoout_output *out = &videoout_output;
     mtx_lock(&out->lock);
     for (;;) {
@@ -208,7 +492,24 @@ index 1f59ac2..efa145d 100644
        const struct wsi_videoout_present present = out->queue[out->queue_head];
        mtx_unlock(&out->lock);
  
-@@ -553,6 +589,7 @@ videoout_flip_thread(void *data)
+       struct wsi_videoout_swapchain *chain = present.chain;
+       const struct wsi_device *wsi = chain->base.wsi;
+-      wsi->WaitForFences(chain->base.device, 1, &present.fence, VK_TRUE, UINT64_MAX);
++      const VkResult fence = wsi->WaitForFences(chain->base.device, 1, &present.fence, VK_TRUE, UINT64_MAX);
+ 
+       mtx_lock(&out->lock);
++      if (fence != VK_SUCCESS) {
++         out->buffer[present.buffer].pending = false;
++         out->queue_head = (out->queue_head + 1) % ARRAY_SIZE(out->queue);
++         out->queue_count--;
++         chain->in_flight--;
++         cnd_broadcast(&out->changed);
++         continue;
++      }
+       const int64_t argument = out->flip_argument + 1;
+       const int result = sceVideoOutSubmitFlip(out->handle, (int32_t)present.buffer, PS5_VIDEO_OUT_FLIP_VSYNC,
+                                                argument);
+@@ -553,6 +599,7 @@
        chain->in_flight--;
        cnd_broadcast(&out->changed);
     }
@@ -216,7 +517,65 @@ index 1f59ac2..efa145d 100644
     return 0;
  }
  
-@@ -1123,6 +1160,10 @@ videoout_swapchain_destroy(struct wsi_swapchain *wsi_chain, const VkAllocationCa
+@@ -1003,7 +1050,9 @@
+ {
+    struct wsi_videoout_swapchain *chain = (struct wsi_videoout_swapchain *)wsi_chain;
+    struct wsi_videoout_output *out = &videoout_output;
++   const uint64_t started = os_time_get_nano();
+    const uint64_t deadline = os_time_get_absolute_timeout(info->timeout);
++   unsigned waits = 0;
+ 
+    mtx_lock(&out->lock);
+    for (;;) {
+@@ -1015,7 +1064,15 @@
+       const uint32_t index = videoout_free_buffer_locked(chain->first, chain->base.image_count, &vblank);
+       if (index != UINT32_MAX) {
+          out->buffer[index].held = true;
++         const uint64_t done = os_time_get_nano();
++         static uint64_t last_report;
++         const bool slow = done - started >= UINT64_C(12000000) && done - last_report >= UINT64_C(250000000);
++         if (slow)
++            last_report = done;
+          mtx_unlock(&out->lock);
++         if (slow)
++            fprintf(stderr, "RECOMPILER_VIDEOOUT_ACQUIRE: wait_us=%" PRIu64 " waits=%u images=%u\n",
++                    (done - started) / 1000, waits, chain->base.image_count);
+          *image_index = index - chain->first;
+          return VK_SUCCESS;
+       }
+@@ -1023,23 +1080,18 @@
+          mtx_unlock(&out->lock);
+          return VK_NOT_READY;
+       }
+-      if (os_time_get_nano() >= deadline) {
++      const uint64_t now = os_time_get_nano();
++      if (now >= deadline) {
+          mtx_unlock(&out->lock);
+          return VK_TIMEOUT;
+       }
+-      if (vblank) {
+-         /* A flip still to show frees one at a vblank. */
+-         const int handle = out->handle;
++      // Scanout can free an image without a condition signal. Use short
++      // sleeps in that case, while still allowing flip completion to wake us.
++      const uint64_t interval = vblank ? UINT64_C(1000000) : UINT64_C(20000000);
++      ++waits;
++      if (ps5_cond_wait_for(&out->changed, &out->lock, MIN2(deadline - now, interval)) == thrd_error) {
+          mtx_unlock(&out->lock);
+-         sceVideoOutWaitVblank(handle);
+-         mtx_lock(&out->lock);
+-      } else {
+-         /* A flip waiting for its frame, or an image held: wait for either. */
+-         struct timespec until;
+-         const uint64_t wake = MIN2(deadline, os_time_get_nano() + UINT64_C(20000000));
+-         until.tv_sec = wake / 1000000000;
+-         until.tv_nsec = wake % 1000000000;
+-         cnd_timedwait(&out->changed, &out->lock, &until);
++         return VK_ERROR_DEVICE_LOST;
+       }
+    }
+ }
+@@ -1123,6 +1175,10 @@
     }
     wsi_swapchain_finish(&chain->base);
     vk_free(pAllocator, chain);
@@ -227,15 +586,29 @@ index 1f59ac2..efa145d 100644
     return VK_SUCCESS;
  }
  
-@@ -1200,6 +1241,7 @@ videoout_surface_create_swapchain(VkIcdSurfaceBase *icd_surface, VkDevice device
+@@ -1157,7 +1213,8 @@
+    if (result != VK_SUCCESS)
+       return result;
+ 
+-   const uint32_t num_images = MAX2(pCreateInfo->minImageCount, 3);
++   // Every buffer in this set was already allocated and registered by VideoOut.
++   const uint32_t num_images = VIDEOOUT_BUFFERS;
+    const size_t size = sizeof(struct wsi_videoout_swapchain) + num_images * sizeof(struct wsi_image);
+    struct wsi_videoout_swapchain *chain = vk_zalloc(pAllocator, size, 8, VK_SYSTEM_ALLOCATION_SCOPE_OBJECT);
+    if (chain == NULL)
+@@ -1200,8 +1257,11 @@
     if (out->current)
        out->current->retired = true;
     out->current = chain;
 +   out->active_swapchains++;
     mtx_unlock(&out->lock);
  
++   fprintf(stderr, "RECOMPILER_VIDEOOUT_SWAPCHAIN: images=%u requested=%u width=%u height=%u\n",
++           num_images, pCreateInfo->minImageCount, pCreateInfo->imageExtent.width, pCreateInfo->imageExtent.height);
     *swapchain_out = &chain->base;
-@@ -1243,3 +1285,79 @@ void
+    return VK_SUCCESS;
+ }
+@@ -1243,3 +1303,79 @@
  wsi_display_setup_syncobj_fd(struct wsi_device *wsi_device, int fd)
  {
  }
@@ -315,9 +688,90 @@ index 1f59ac2..efa145d 100644
 +   mtx_unlock(&out->lock);
 +   return result;
 +}
+diff --git a/src/amd/vulkan/winsys/ps5/submit-dispatch.h b/src/amd/vulkan/winsys/ps5/submit-dispatch.h
+new file mode 100644
+--- /dev/null
++++ b/src/amd/vulkan/winsys/ps5/submit-dispatch.h
+@@ -0,0 +1,77 @@
++#pragma once
++
++/* The caller serializes publication. The worker never takes the caller's
++ * lock. One job slot bounds host work ahead of native submission. */
++struct submit_dispatch {
++   mtx_t mutex;
++   cnd_t changed;
++   thrd_t thread;
++   void (*execute)(void *);
++   void *data;
++   bool stopping;
++};
++
++static int submit_dispatch_run(void *opaque)
++{
++   struct submit_dispatch *dispatch = opaque;
++   mtx_lock(&dispatch->mutex);
++   for (;;) {
++      while (!dispatch->data && !dispatch->stopping)
++         cnd_wait(&dispatch->changed, &dispatch->mutex);
++      if (!dispatch->data)
++         break;
++      void *job = dispatch->data;
++      mtx_unlock(&dispatch->mutex);
++      dispatch->execute(job);
++      mtx_lock(&dispatch->mutex);
++      dispatch->data = NULL;
++      cnd_broadcast(&dispatch->changed);
++   }
++   mtx_unlock(&dispatch->mutex);
++   return 0;
++}
++
++static bool submit_dispatch_start(struct submit_dispatch *dispatch, void (*execute)(void *))
++{
++   dispatch->execute = execute;
++   if (mtx_init(&dispatch->mutex, mtx_plain) != thrd_success)
++      return false;
++   if (cnd_init(&dispatch->changed) != thrd_success) {
++      mtx_destroy(&dispatch->mutex);
++      return false;
++   }
++   if (thrd_create(&dispatch->thread, submit_dispatch_run, dispatch) != thrd_success) {
++      cnd_destroy(&dispatch->changed);
++      mtx_destroy(&dispatch->mutex);
++      return false;
++   }
++   return true;
++}
++
++static void submit_dispatch_wait(struct submit_dispatch *dispatch)
++{
++   mtx_lock(&dispatch->mutex);
++   while (dispatch->data)
++      cnd_wait(&dispatch->changed, &dispatch->mutex);
++   mtx_unlock(&dispatch->mutex);
++}
++
++static void submit_dispatch_publish(struct submit_dispatch *dispatch, void *job)
++{
++   mtx_lock(&dispatch->mutex);
++   assert(!dispatch->data && job);
++   dispatch->data = job;
++   cnd_broadcast(&dispatch->changed);
++   mtx_unlock(&dispatch->mutex);
++}
++
++static inline void submit_dispatch_stop(struct submit_dispatch *dispatch)
++{
++   mtx_lock(&dispatch->mutex);
++   dispatch->stopping = true;
++   cnd_broadcast(&dispatch->changed);
++   mtx_unlock(&dispatch->mutex);
++   thrd_join(dispatch->thread, NULL);
++   cnd_destroy(&dispatch->changed);
++   mtx_destroy(&dispatch->mutex);
++}
 diff --git a/src/vulkan/wsi/videoout_refresh_policy.h b/src/vulkan/wsi/videoout_refresh_policy.h
 new file mode 100644
-index 0000000..030f2d4
 --- /dev/null
 +++ b/src/vulkan/wsi/videoout_refresh_policy.h
 @@ -0,0 +1,32 @@
@@ -353,3 +807,23 @@ index 0000000..030f2d4
 +}
 +
 +#endif
+diff --git a/src/util/ps5-cond-wait.h b/src/util/ps5-cond-wait.h
+new file mode 100644
+--- /dev/null
++++ b/src/util/ps5-cond-wait.h
+@@ -0,0 +1,15 @@
++#pragma once
++
++/* C11 condition variables use TIME_UTC. The caller measures and bounds the
++ * remaining time on the monotonic clock before entering this wait. */
++static inline int ps5_cond_wait_for(cnd_t *condition, mtx_t *mutex, uint64_t remaining_ns)
++{
++   struct timespec until;
++   if (timespec_get(&until, TIME_UTC) != TIME_UTC)
++      return thrd_error;
++
++   const uint64_t nanos = until.tv_nsec + remaining_ns;
++   until.tv_sec += nanos / UINT64_C(1000000000);
++   until.tv_nsec = nanos % UINT64_C(1000000000);
++   return cnd_timedwait(condition, mutex, &until);
++}

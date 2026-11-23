@@ -6,7 +6,9 @@ from pathlib import Path
 import re
 import shutil
 import struct
+import subprocess
 import sys
+from tempfile import TemporaryDirectory
 
 TEMPLATE = Path(__file__).resolve().parents[1] / "templates/rpcs3-recompiler.yml"
 TITLE = "PS3 TO PS5 LLVM RPCS3 RECOMPILER"
@@ -74,6 +76,28 @@ def png(path):
     return path
 
 
+def prepare_icon(source, target):
+    png(source)
+    ffmpeg = shutil.which("ffmpeg")
+    if not ffmpeg:
+        raise ValueError("Install FFmpeg before using a custom --icon0")
+    fit = ("[0:v]split[bg][fg];"
+           "[bg]scale=512:512:force_original_aspect_ratio=increase,crop=512:512,"
+           "format=yuv444p,boxblur=18[canvas];"
+           "[fg]scale=512:512:force_original_aspect_ratio=decrease[art];"
+           "[canvas][art]overlay=(W-w)/2:(H-h)/2:format=auto,format=rgb24[icon]")
+    try:
+        subprocess.run([ffmpeg, "-v", "error", "-nostdin", "-n", "-i", str(source),
+                        "-filter_complex_threads", "1", "-filter_complex", fit, "-map", "[icon]",
+                        "-frames:v", "1", "-update", "1", str(target)], check=True, timeout=60)
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as error:
+        raise ValueError("Could not fit the custom PS5 icon") from error
+    with png(target).open("rb") as file:
+        dims = struct.unpack_from(">II", file.read(24), 16)
+    if dims != (512, 512):
+        raise ValueError("Prepared PS5 icon must be 512x512")
+
+
 def dds_background(path):
     with path.open("rb") as file:
         header = file.read(148)
@@ -97,15 +121,24 @@ def stage(args):
     if not (firmware / "sys/external").is_dir():
         raise ValueError("Select the dev_flash directory from your local RPCS3 firmware installation")
     metadata = native_metadata(args.param, args.display_mode)
-    icon = png(args.icon0 or TEMPLATE.with_name("icon0.png"))
     background = None
     if args.pic0:
         background = dds_background(args.pic0) if args.pic0.suffix.lower() == ".dds" else png(args.pic0)
     splash = dds_background(args.pic1) if args.pic1 else None
     if output.is_relative_to(disc) or output.is_relative_to(firmware):
         raise ValueError("Choose an output directory outside the input directories")
-    # Reserve the destination once so retries cannot overwrite an existing dump.
-    output.mkdir()
+    update = args.update_bin.resolve(strict=True) if args.update_bin else None
+    if update and (update.name != "UPDATE.BIN" or not update.is_file() or not update.stat().st_size):
+        raise ValueError("Select the non-empty UPDATE.BIN produced by pack_update.py")
+    with TemporaryDirectory() as scratch:
+        icon = png(TEMPLATE.with_name("icon0.png"))
+        if args.icon0:
+            icon = Path(scratch) / "icon0.png"
+            prepare_icon(args.icon0.resolve(strict=True), icon)
+        # Reserve the destination once so retries cannot overwrite an existing dump.
+        output.mkdir()
+        (output / "sce_sys").mkdir()
+        shutil.copyfile(icon, output / "sce_sys/icon0.png")
     shutil.copytree(disc / "PS3_GAME", output / "PS3_GAME")
     shutil.copyfile(disc / "PS3_DISC.SFB", output / "PS3_DISC.SFB")
     shutil.copytree(firmware, output / "dev_flash")
@@ -118,8 +151,8 @@ def stage(args):
         (output / "spu-async.enable").touch()
     elif args.spu_hybrid:
         (output / "spu-hybrid.enable").touch()
-    (output / "sce_sys").mkdir()
-    shutil.copyfile(icon, output / "sce_sys/icon0.png")
+    if update:
+        shutil.copyfile(update, output / "UPDATE.BIN")
     if background:
         shutil.copyfile(background, output / ("sce_sys/pic0.dds" if background.suffix.lower() == ".dds" else "sce_sys/pic0.png"))
     if splash:
@@ -140,9 +173,10 @@ def main():
     build = subcommands.add_parser("stage")
     for name in ("disc", "output", "core", "param", "firmware"):
         build.add_argument("--" + name, type=Path, required=True)
-    build.add_argument("--icon0", type=Path, help="Override the default RPCS3 icon")
+    build.add_argument("--icon0", type=Path, help="Fit a custom PNG into the 512x512 PS5 icon (FFmpeg required)")
     build.add_argument("--pic0", type=Path, help="Use a 4K BC7 DDS selection background or a legacy PNG")
     build.add_argument("--pic1", type=Path, help="Use a 4K BC7 DDS launch image")
+    build.add_argument("--update-bin", type=Path, help="Stage UPDATE.BIN for an EBOOT built with its matching manifest")
     build.add_argument("--display-mode", choices=("default", "120hz", "120hz-vrr"), default="default",
                        help="Select a high-refresh profile for a compatible game and display")
     spu = build.add_mutually_exclusive_group()

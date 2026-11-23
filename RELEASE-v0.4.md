@@ -1,0 +1,8 @@
+# PS3 TO PS5 LLVM RPCS3 RECOMPILER v0.4
+
+- **RPCS3 backports.** Preserve Vulkan pipeline state across compatible render passes, retry queued RSX events, and bring in upstream SPU module initialization, MFC reservation ordering, DMA lock ownership, and legacy save data callback fixes.
+- **Vulkan and VideoOut.** Include source patches for ordered asynchronous RADV submission, swapchain buffer reuse, and corrected timed waits. Queue and descriptor timing logs help identify slow submissions. The release documents how to rebuild the driver at the pinned revision and retains upstream notices.
+- **Audio.** Preserve full PCM blocks under mixer backpressure and soften short playback gaps with adjacent real audio. The accepted audio implementation improved the tested scene on PS5. Sustained source shortfalls and frame-rate drops remain title- and scene-dependent.
+- **Title preparation.** Fit custom icons into an opaque, proportional 512×512 layout, validate 4K BC7 backgrounds, and preserve localized compilation artwork. Stage a verified `UPDATE.BIN` with its matching local manifest. The installer now repairs missing update files and preserves metadata written by the game. The new guide covers disc-key matching, region checks, DLC pack selection, and patch enablement.
+
+Source release. Build dependencies and title data are supplied locally. See [the README](https://github.com/Michele-M-Media/PS3-TO-PS5-LLVM-RPCS3-RECOMPILER/blob/v0.4/README.md) and [the title preparation guide](https://github.com/Michele-M-Media/PS3-TO-PS5-LLVM-RPCS3-RECOMPILER/blob/v0.4/docs/preparing-titles.md) for the build and verification steps.
